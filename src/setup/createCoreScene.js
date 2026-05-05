@@ -10,9 +10,12 @@ export function createCoreScene() {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.body.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x8aa8c7, 12, 34);
 
   const camera = new THREE.PerspectiveCamera(
     75,
@@ -23,9 +26,15 @@ export function createCoreScene() {
   camera.position.set(0, 0, 6);
 
   // Soft baseline light plus a directional "sun" light.
-  scene.add(new THREE.AmbientLight(0xffffff, 0.3));
-  const sunLight = new THREE.DirectionalLight(0xffffff, 1);
-  sunLight.position.set(5, 5, 5);
+  scene.add(new THREE.AmbientLight(0xf2f7ff, 0.35));
+  const sunLight = new THREE.DirectionalLight(0xfff8e8, 1.2);
+  sunLight.position.set(7, 12, 5);
+  sunLight.castShadow = true;
+  sunLight.shadow.mapSize.set(2048, 2048);
+  sunLight.shadow.camera.left = -12;
+  sunLight.shadow.camera.right = 12;
+  sunLight.shadow.camera.top = 12;
+  sunLight.shadow.camera.bottom = -12;
   scene.add(sunLight);
 
   return { renderer, scene, camera, sunLight };

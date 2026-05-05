@@ -38,3 +38,7 @@ function sampleHeight(x, y, z, octaves = 6) {
   // ...
 }
 ```
+
+
+# Coding Standard 
+Do not use magic numbers, and have a neat way to define variables and pass them to shaders 

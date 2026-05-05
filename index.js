@@ -1,42 +1,31 @@
-import * as THREE from 'three';
 import { createCoreScene, handleResize } from './src/setup/createCoreScene.js';
-import { createPlanet } from './src/planet/createPlanet.js';
-import { createAtmosphere } from './src/planet/createAtmosphere.js';
-import { createWaterPost } from './src/postprocessing/createWaterPost.js';
+import { createTerrainRenderer } from './src/terrain/createTerrainRenderer.js';
+import { createTerrainControls } from './src/ui/createTerrainControls.js';
 
 const { renderer, scene, camera } = createCoreScene();
+renderer.setClearColor(0x8aa8c7, 1);
 
-const { planet, radius } = createPlanet();
-scene.add(planet);
-const atmosphere = createAtmosphere(radius);
-scene.add(atmosphere);
+const terrainRenderer = createTerrainRenderer();
+scene.add(terrainRenderer.mesh);
 
-const waterPost = createWaterPost(renderer, scene, camera, {
-  planetCenter: new THREE.Vector3(0, 0, 0),
-  planetRadius: radius
+camera.position.set(4, 4.5, 7);
+camera.lookAt(0, 0, 0);
+
+createTerrainControls(terrainRenderer.settings, (patch) => {
+  terrainRenderer.update(patch);
 });
 
-handleResize(renderer, camera, (width, height) => {
-  waterPost.resize(width, height);
-});
-
-let time = 0;
+handleResize(renderer, camera, () => {});
 
 /**
- * Drives one animation frame for the planet scene.
- * Inputs: none directly; uses module-level state (`time`, `planet`, `waterPost`).
- * Outputs: schedules next frame, rotates planet, and renders the post chain.
- * Internal: increments time, applies a small Y rotation, then renders depth-aware water.
+ * Drives one animation frame for the interactive terrain scene.
+ * Inputs: none directly; uses module-level `renderer`, `scene`, and `camera`.
+ * Outputs: schedules next frame and renders the current terrain state.
+ * Internal: loops via `requestAnimationFrame` and renders directly with Three.js.
  */
 function animate() {
   requestAnimationFrame(animate);
-
-  time += 0.002;
-  planet.rotation.y += 0.002;
-  atmosphere.rotation.y += 0.002;
-
-  // Render through the depth-aware water post chain.
-  waterPost.render(time);
+  renderer.render(scene, camera);
 }
 
 animate();
