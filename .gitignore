@@ -402,3 +402,7 @@ FodyWeavers.xsd
 
 # Cursor local AI config/rules
 .cursor/
+
+# Local planning documents
+plan.md
+plans/
