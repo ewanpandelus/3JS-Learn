@@ -1,8 +1,11 @@
 import { createCoreScene, handleResize } from './src/setup/createCoreScene.js';
 import { OrbitControls } from 'jsm/controls/OrbitControls.js';
+import { createClient } from '@supabase/supabase-js';
 import { createTerrainRenderer } from './src/terrain/createTerrainRenderer.js';
 import { createTerrainControls } from './src/ui/createTerrainControls.js';
 import { createWaterSystem } from './src/water/createWaterSystem.js';
+import { createAuthOverlay } from './src/auth/createAuthOverlay.js';
+import { getSupabaseConfig, isSupabaseConfigured } from './src/config/supabaseConfig.js';
 
 const { renderer, scene, camera } = createCoreScene();
 renderer.setClearColor(0x8aa8c7, 1);
@@ -23,12 +26,14 @@ camera.position.set(4, 4.5, 7);
 camera.lookAt(0, 0, 0);
 const controls = setupCameraControls(camera, renderer.domElement);
 
-createTerrainControls(terrainRenderer.settings, (patch) => {
+const terrainControls = createTerrainControls(terrainRenderer.settings, (patch) => {
   terrainRenderer.update(patch);
   if (typeof patch.seaLevel === 'number') {
     waterSystem.updateSeaLevel(patch.seaLevel);
   }
 });
+
+initializeAuthentication();
 
 handleResize(renderer, camera, () => {
   controls.update();
@@ -71,3 +76,35 @@ function animate() {
 }
 
 animate();
+
+/**
+ * Initializes Supabase auth and gates editor interaction until signed in.
+ * Inputs: none; reads runtime Supabase config and module-level scene/control instances.
+ * Outputs: mounts auth overlay and toggles editor interactivity by session state.
+ * Internal: builds Supabase client, checks config validity, and uses auth callback to lock/unlock controls.
+ */
+function initializeAuthentication() {
+  if (!isSupabaseConfigured()) {
+    const { url, anonKey } = getSupabaseConfig();
+    console.warn('Supabase auth disabled. Set url/anonKey in src/config/supabaseConfig.js.', { url, anonKeyLength: anonKey.length });
+    lockEditorForAuth(false);
+    return;
+  }
+
+  const { url, anonKey } = getSupabaseConfig();
+  const supabase = createClient(url, anonKey);
+  createAuthOverlay(supabase, (isSignedIn) => {
+    lockEditorForAuth(!isSignedIn);
+  });
+}
+
+/**
+ * Toggles controls and UI visibility when authentication state changes.
+ * Inputs: `isLocked` boolean indicating whether editor access should be blocked.
+ * Outputs: enables/disables orbit controls and shows/hides terrain control panel.
+ * Internal: centralizes lock state so both auth startup and session changes use one path.
+ */
+function lockEditorForAuth(isLocked) {
+  controls.enabled = !isLocked;
+  terrainControls.element.style.display = isLocked ? 'none' : 'block';
+}

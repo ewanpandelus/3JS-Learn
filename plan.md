@@ -55,6 +55,54 @@ isProject: false
 - **Neon Postgres + custom auth**
   - Free Postgres, but requires separate auth setup.
 
+## Supabase Overview and Setup
+
+### What Supabase Is
+- Open-source backend platform (Firebase alternative) used here for the auth + database needs.
+- Bundles features we need for this MVP:
+  - **Postgres database** with auto-generated REST and realtime APIs.
+  - **Authentication** (email/password, OAuth, magic links).
+  - **Row Level Security (RLS)** for per-user data protection.
+  - **Storage** for files (e.g., optional landscape preview images).
+- Free tier is enough for the MVP scope of this project.
+
+### Why It Fits This Project
+- Single managed service covers auth + DB + API, removing the need for a custom backend.
+- RLS lets us enforce "user can only read/write their own landscapes" at the database layer.
+- Generates a Postgres connection plus a JS client (`@supabase/supabase-js`) usable directly from the Three.js frontend.
+
+### Create the Supabase Project
+1. Sign in at [https://supabase.com](https://supabase.com).
+2. Click **New project**.
+3. Choose the organization.
+4. Fill in:
+   - **Name**: e.g. `threejs-landscape`.
+   - **Database password**: strong password, store securely.
+   - **Region**: closest to target users.
+5. Click **Create new project** and wait ~1-2 minutes for provisioning.
+
+### Configure Authentication
+1. **Authentication -> Providers**: enable **Email** (email/password) for MVP.
+2. **Authentication -> URL Configuration**:
+   - **Site URL**: deployed app URL (or `http://localhost:5173` during dev).
+   - **Redirect URLs**: include both:
+     - `http://localhost:5173`
+     - Production URL (e.g. `https://<user>.github.io/<repo>/` if using GitHub Pages).
+
+### Get the API Keys
+- In **Project Settings -> API**, copy:
+  - `Project URL` -> used as `VITE_SUPABASE_URL`.
+  - `anon public key` -> used as `VITE_SUPABASE_ANON_KEY`.
+- Never expose the `service_role` key in the frontend.
+
+### Frontend Wiring (planned)
+- Install client SDK: `npm i @supabase/supabase-js`.
+- Create [src/lib/supabaseClient.js](c:\Ewan\Dev\3JS-Learn\src\lib\supabaseClient.js) using `createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY)`.
+- Local env via `.env.local`:
+  - `VITE_SUPABASE_URL=...`
+  - `VITE_SUPABASE_ANON_KEY=...`
+- For deployment, store the same two values as host secrets/env vars (GitHub Actions secrets, Netlify/Vercel env vars).
+
 ## Data Model (MVP)
 - **users** (managed by auth provider)
   - id, email, created_at
@@ -110,9 +158,11 @@ flowchart LR
    - Publish immediately to selected host as `v0.1` so the site is always live.
 
 2. **Step 2: Auth + Second Publish**
-   - Configure Supabase project and auth providers (email/password first).
-   - Add sign up, sign in, sign out, and session persistence.
-   - Publish as `v0.2` after auth smoke testing.
+   - Configure Supabase project and auth providers (email/password first) - see "Supabase Overview and Setup" section above.
+   - Add sign up, sign in, sign out, and session persistence using `supabase.auth` (`signUp`, `signInWithPassword`, `signOut`, `getSession`, `onAuthStateChange`).
+   - Gate editor UI behind auth state; show login/signup form when logged out.
+   - Add `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` to local `.env.local` and to deployment env/secrets.
+   - Publish as `v0.2` after auth smoke testing (sign up, sign out, sign back in, session persists across refresh).
 
 3. **Step 3: Save/Load + Third Publish**
    - Create `user_settings` and `landscapes` tables + RLS policies.
