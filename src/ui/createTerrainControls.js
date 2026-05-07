@@ -25,6 +25,14 @@ export function createTerrainControls(initialSettings, onChange) {
     <h2 style="margin:0 0 8px;font-size:14px;font-weight:600;">Terrain Generator</h2>
     <p style="margin:0 0 10px;opacity:.82;line-height:1.35;">Adjust parameters to regenerate terrain in real time.</p>
     ${buildControl('Amplitude', 'amplitude', 'range', { min: 0, max: 4, step: 0.01, value: initialSettings.amplitude })}
+    ${buildControl('Sea Level', 'seaLevel', 'range', { min: -1.2, max: 1.2, step: 0.01, value: initialSettings.seaLevel })}
+    ${buildControl('Island Radius', 'islandRadius', 'range', { min: 0.2, max: 0.9, step: 0.01, value: initialSettings.islandRadius })}
+    ${buildControl('Island Falloff', 'islandFalloff', 'range', { min: 0.08, max: 0.8, step: 0.01, value: initialSettings.islandFalloff })}
+    ${buildControl('Coastal Shelf', 'coastalShelf', 'range', { min: 0.05, max: 0.9, step: 0.01, value: initialSettings.coastalShelf })}
+    ${buildControl('Slope Smoothing', 'slopeSmoothing', 'range', { min: 0, max: 0.85, step: 0.01, value: initialSettings.slopeSmoothing })}
+    ${buildControl('Edge Warp Start', 'edgeWarpStart', 'range', { min: 0.45, max: 0.95, step: 0.01, value: initialSettings.edgeWarpStart })}
+    ${buildControl('Edge Warp Strength', 'edgeWarpStrength', 'range', { min: 0, max: 2.2, step: 0.01, value: initialSettings.edgeWarpStrength })}
+    ${buildControl('Edge Warp Frequency', 'edgeWarpFrequency', 'range', { min: 0.1, max: 1.4, step: 0.01, value: initialSettings.edgeWarpFrequency })}
     ${buildControl('Frequency', 'frequency', 'range', { min: 0.1, max: 3, step: 0.01, value: initialSettings.frequency })}
     ${buildControl('Octaves', 'octaves', 'range', { min: 1, max: 8, step: 1, value: initialSettings.octaves })}
     ${buildControl('Lacunarity', 'lacunarity', 'range', { min: 1.2, max: 3.2, step: 0.01, value: initialSettings.lacunarity })}
