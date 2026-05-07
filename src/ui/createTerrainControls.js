@@ -146,6 +146,38 @@ export function createTerrainControls(initialSettings, onChange) {
   document.body.appendChild(panel);
 
   /**
+   * Writes provided setting values into matching form inputs.
+   * Inputs: `nextSettings` partial terrain settings object.
+   * Outputs: updates input element values/labels without emitting callbacks.
+   * Internal: maps known input names to strings/checked values and refreshes visible numeric badges.
+   */
+  function setValues(nextSettings) {
+    for (const [key, value] of Object.entries(nextSettings ?? {})) {
+      const input = panel.querySelector(`input[name="${key}"]`);
+      if (!(input instanceof HTMLInputElement)) {
+        continue;
+      }
+
+      if (input.type === 'checkbox') {
+        input.checked = Boolean(value);
+        continue;
+      }
+
+      if (value === undefined || value === null) {
+        continue;
+      }
+
+      input.value = String(value);
+      if (input.type !== 'color') {
+        const valueBubble = panel.querySelector(`[data-value="${key}"]`);
+        if (valueBubble) {
+          valueBubble.textContent = String(value);
+        }
+      }
+    }
+  }
+
+  /**
    * Removes the controls panel and listeners from the DOM.
    * Inputs: none.
    * Outputs: side effect cleanup of event handlers and panel element.
@@ -162,6 +194,7 @@ export function createTerrainControls(initialSettings, onChange) {
 
   return {
     element: panel,
+    setValues,
     destroy
   };
 }

@@ -165,9 +165,48 @@ flowchart LR
    - Publish as `v0.2` after auth smoke testing (sign up, sign out, sign back in, session persists across refresh).
 
 3. **Step 3: Save/Load + Third Publish**
-   - Create `user_settings` and `landscapes` tables + RLS policies.
-   - Implement save, list, rename, and load landscape configurations per user.
-   - Publish as `v0.3` once CRUD paths pass functional tests.
+   - **Database setup (Supabase SQL editor)**
+     - Run [supabase/schema.sql](c:\Ewan\Dev\3JS-Learn\supabase\schema.sql) to create `public.user_settings` and `public.landscapes` with `pgcrypto`, supporting indexes, and the shared `set_updated_at` trigger.
+     - Run [supabase/policies.sql](c:\Ewan\Dev\3JS-Learn\supabase\policies.sql) to enable RLS and apply owner-only policies on both tables, plus public-read on `landscapes` for future share flow.
+     - Verification: in SQL editor run `select * from public.landscapes;` while signed in as a fresh user - expect 0 rows and no permission error.
+   - **Frontend persistence module** ([src/persistence/createLandscapeStore.js](c:\Ewan\Dev\3JS-Learn\src\persistence\createLandscapeStore.js))
+     - `list()` returns recent rows ordered by `updated_at desc`, capped at 50.
+     - `save(name, config)` inserts a row with `name` + `config_json` and returns the inserted row.
+     - `rename(id, nextName)` updates `name` for one row; RLS enforces ownership.
+     - `remove(id)` deletes one row by id.
+     - All errors propagate as thrown `Error` instances containing the Supabase message.
+   - **Editor wiring** ([index.js](c:\Ewan\Dev\3JS-Learn\index.js))
+     - `getSerializableLandscapeConfig()` clones `terrainRenderer.settings` into `{ terrainSettings }`.
+     - `applySavedLandscapeConfig(config)` calls `terrainRenderer.update`, syncs `waterSystem.updateSeaLevel`, and calls `terrainControls.setValues` so the controls UI reflects the loaded preset.
+   - **Storage panel UI** ([src/ui/createLandscapeStoragePanel.js](c:\Ewan\Dev\3JS-Learn\src\ui\createLandscapeStoragePanel.js))
+     - Top-right panel with name input, Save Current, and Refresh buttons.
+     - List of saved landscapes with Load / Rename / Delete actions and a relative `updated_at` label.
+     - Disabled until the user is signed in; auto-refreshes via the auth state callback.
+   - **Auth gating**
+     - `createAuthOverlay` callback toggles `storagePanel.setDisabled(!isSignedIn)` and calls `storagePanel.refresh()` on sign-in.
+   - **Smoke tests (run locally and on live URL)**
+     1. Sign in -> storage panel becomes enabled and lists 0 landscapes.
+     2. Save with name "Island A" -> entry appears with current timestamp.
+     3. Adjust sliders -> click Load on "Island A" -> terrain mesh, water sea level, and slider values revert to saved state.
+     4. Rename "Island A" to "Island B" -> entry updates after refresh.
+     5. Delete "Island B" -> entry disappears from list.
+     6. Open a second account in an incognito window -> first account's rows are not visible (validates RLS).
+     7. Refresh page after save -> session persists and list still shows saved rows.
+   - **Publish v0.3**
+     - Commit Step 3 changes, push to `main`, wait for GitHub Pages deploy.
+     - Re-run smoke tests on the live URL.
+     - Tag release `v0.3`.
+
+```mermaid
+flowchart LR
+  User[UserBrowser] --> EditorUI[TerrainControls]
+  EditorUI --> Renderer[TerrainRenderer]
+  User --> StoragePanel[LandscapeStoragePanel]
+  StoragePanel -->|"save/list/rename/remove"| Store[LandscapeStore]
+  Store -->|"REST + JWT"| SupabaseDB[(LandscapesTable)]
+  StoragePanel -->|"applyConfig"| Renderer
+  Renderer --> WaterSystem[WaterSystem]
+```
 
 4. **Step 4: Share Button + Fourth Publish**
    - Add Share button to generate public landscape URL.

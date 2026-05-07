@@ -3,9 +3,11 @@ import { OrbitControls } from 'jsm/controls/OrbitControls.js';
 import { createClient } from '@supabase/supabase-js';
 import { createTerrainRenderer } from './src/terrain/createTerrainRenderer.js';
 import { createTerrainControls } from './src/ui/createTerrainControls.js';
+import { createLandscapeStoragePanel } from './src/ui/createLandscapeStoragePanel.js';
 import { createWaterSystem } from './src/water/createWaterSystem.js';
 import { createAuthOverlay } from './src/auth/createAuthOverlay.js';
 import { getSupabaseConfig, isSupabaseConfigured } from './src/config/supabaseConfig.js';
+import { createLandscapeStore } from './src/persistence/createLandscapeStore.js';
 
 const { renderer, scene, camera } = createCoreScene();
 renderer.setClearColor(0x8aa8c7, 1);
@@ -32,6 +34,7 @@ const terrainControls = createTerrainControls(terrainRenderer.settings, (patch) 
     waterSystem.updateSeaLevel(patch.seaLevel);
   }
 });
+let storagePanel = null;
 
 initializeAuthentication();
 
@@ -93,8 +96,22 @@ function initializeAuthentication() {
 
   const { url, anonKey } = getSupabaseConfig();
   const supabase = createClient(url, anonKey);
-  createAuthOverlay(supabase, (isSignedIn) => {
+  const landscapeStore = createLandscapeStore(supabase);
+  storagePanel = createLandscapeStoragePanel({
+    store: landscapeStore,
+    getCurrentConfig: getSerializableLandscapeConfig,
+    applyConfig: applySavedLandscapeConfig
+  });
+  createAuthOverlay(supabase, async (isSignedIn) => {
     lockEditorForAuth(!isSignedIn);
+    if (!storagePanel) {
+      return;
+    }
+
+    storagePanel.setDisabled(!isSignedIn);
+    if (isSignedIn) {
+      await storagePanel.refresh();
+    }
   });
 }
 
@@ -107,4 +124,38 @@ function initializeAuthentication() {
 function lockEditorForAuth(isLocked) {
   controls.enabled = !isLocked;
   terrainControls.element.style.display = isLocked ? 'none' : 'block';
+  if (storagePanel) {
+    storagePanel.element.style.display = isLocked ? 'none' : 'block';
+  }
+}
+
+/**
+ * Captures current terrain settings as a serializable config payload.
+ * Inputs: none; reads active renderer settings from module scope.
+ * Outputs: plain object containing terrain settings snapshot.
+ * Internal: clones settings so persistence writes are not tied to mutable runtime references.
+ */
+function getSerializableLandscapeConfig() {
+  return {
+    terrainSettings: { ...terrainRenderer.settings }
+  };
+}
+
+/**
+ * Applies a saved landscape payload back into renderer, water system, and controls UI.
+ * Inputs: `config` object loaded from persisted `config_json`.
+ * Outputs: mutates scene state to match saved settings and updates visible control values.
+ * Internal: validates payload shape, updates terrain first, then syncs dependent sea level and input widgets.
+ */
+function applySavedLandscapeConfig(config) {
+  const terrainSettings = config?.terrainSettings;
+  if (!terrainSettings || typeof terrainSettings !== 'object') {
+    return;
+  }
+
+  terrainRenderer.update(terrainSettings);
+  if (typeof terrainSettings.seaLevel === 'number') {
+    waterSystem.updateSeaLevel(terrainSettings.seaLevel);
+  }
+  terrainControls.setValues(terrainSettings);
 }
