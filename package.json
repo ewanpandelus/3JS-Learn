@@ -1,5 +1,12 @@
 {
+  "scripts": {
+    "dev": "serve . -l 4173",
+    "preview": "serve . -l 4173"
+  },
   "dependencies": {
     "simplex-noise": "^4.0.3"
+  },
+  "devDependencies": {
+    "serve": "^14.2.4"
   }
 }

@@ -87,6 +87,12 @@ animate();
  * Internal: builds Supabase client, checks config validity, and uses auth callback to lock/unlock controls.
  */
 function initializeAuthentication() {
+  if (shouldBypassAuthForDevelopment()) {
+    console.info('Development auth bypass enabled (localhost only).');
+    lockEditorForAuth(false);
+    return;
+  }
+
   if (!isSupabaseConfigured()) {
     const { url, anonKey } = getSupabaseConfig();
     console.warn('Supabase auth disabled. Set url/anonKey in src/config/supabaseConfig.js.', { url, anonKeyLength: anonKey.length });
@@ -158,4 +164,29 @@ function applySavedLandscapeConfig(config) {
     waterSystem.updateSeaLevel(terrainSettings.seaLevel);
   }
   terrainControls.setValues(terrainSettings);
+}
+
+/**
+ * Determines whether auth should be bypassed for local development only.
+ * Inputs: none; reads browser location, URL query params, and localStorage.
+ * Outputs: boolean indicating if auth overlay/gating should be skipped.
+ * Internal: only returns true on localhost when `?devBypassAuth=1` is present or localStorage flag is set.
+ */
+function shouldBypassAuthForDevelopment() {
+  const isLocalhost =
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname === '::1';
+  if (!isLocalhost) {
+    return false;
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const queryValue = params.get('devBypassAuth');
+  if (queryValue === '1' || queryValue === 'true') {
+    localStorage.setItem('devBypassAuth', '1');
+    return true;
+  }
+
+  return localStorage.getItem('devBypassAuth') === '1';
 }
