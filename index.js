@@ -81,57 +81,65 @@ function animate() {
 animate();
 
 /**
- * Initializes Supabase auth and gates editor interaction until signed in.
+ * Initializes Supabase auth for cloud landscape storage only.
  * Inputs: none; reads runtime Supabase config and module-level scene/control instances.
- * Outputs: mounts auth overlay and toggles editor interactivity by session state.
- * Internal: builds Supabase client, checks config validity, and uses auth callback to lock/unlock controls.
+ * Outputs: mounts auth widget/modal and landscape storage; editor stays interactive regardless of session.
+ * Internal: builds Supabase client, wires storage enablement to session, and keeps terrain/orbit controls always on.
  */
 function initializeAuthentication() {
   if (shouldBypassAuthForDevelopment()) {
     console.info('Development auth bypass enabled (localhost only).');
-    lockEditorForAuth(false);
+    setEditorChromeVisible(true);
     return;
   }
 
   if (!isSupabaseConfigured()) {
     const { url, anonKey } = getSupabaseConfig();
     console.warn('Supabase auth disabled. Set url/anonKey in src/config/supabaseConfig.js.', { url, anonKeyLength: anonKey.length });
-    lockEditorForAuth(false);
+    setEditorChromeVisible(true);
     return;
   }
 
   const { url, anonKey } = getSupabaseConfig();
   const supabase = createClient(url, anonKey);
   const landscapeStore = createLandscapeStore(supabase);
+  const authActions = {
+    openAuthModal: () => {},
+    signOut: async () => {}
+  };
   storagePanel = createLandscapeStoragePanel({
     store: landscapeStore,
     getCurrentConfig: getSerializableLandscapeConfig,
-    applyConfig: applySavedLandscapeConfig
+    applyConfig: applySavedLandscapeConfig,
+    requestSignIn: () => authActions.openAuthModal(),
+    signOut: () => authActions.signOut()
   });
-  createAuthOverlay(supabase, async (isSignedIn) => {
-    lockEditorForAuth(!isSignedIn);
+  setEditorChromeVisible(true);
+  const authUi = createAuthOverlay(supabase, async (isSignedIn) => {
     if (!storagePanel) {
       return;
     }
 
-    storagePanel.setDisabled(!isSignedIn);
+    storagePanel.setSignedIn(isSignedIn);
     if (isSignedIn) {
       await storagePanel.refresh();
     }
   });
+  authActions.openAuthModal = authUi.openAuthModal;
+  authActions.signOut = authUi.signOut;
 }
 
 /**
- * Toggles controls and UI visibility when authentication state changes.
- * Inputs: `isLocked` boolean indicating whether editor access should be blocked.
- * Outputs: enables/disables orbit controls and shows/hides terrain control panel.
- * Internal: centralizes lock state so both auth startup and session changes use one path.
+ * Shows or hides primary editor UI chrome (terrain panel and landscape storage when present).
+ * Inputs: `isVisible` boolean.
+ * Outputs: toggles terrain panel display; storage panel follows when it exists.
+ * Internal: used for startup layout only; auth no longer hides these panels.
  */
-function lockEditorForAuth(isLocked) {
-  controls.enabled = !isLocked;
-  terrainControls.element.style.display = isLocked ? 'none' : 'block';
+function setEditorChromeVisible(isVisible) {
+  const display = isVisible ? 'block' : 'none';
+  terrainControls.element.style.display = display;
   if (storagePanel) {
-    storagePanel.element.style.display = isLocked ? 'none' : 'block';
+    storagePanel.element.style.display = display;
   }
 }
 

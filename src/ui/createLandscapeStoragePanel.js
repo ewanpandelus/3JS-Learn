@@ -17,11 +17,11 @@ const DATE_FORMAT_OPTIONS = { month: 'short', day: '2-digit', hour: '2-digit', m
 
 /**
  * Creates a storage panel for save/list/load/rename/delete landscape operations.
- * Inputs: `store` CRUD adapter plus callbacks for serialize/apply actions.
- * Outputs: mounted panel with `element`, `refresh()`, `setDisabled()`, and `destroy()` methods.
- * Internal: renders a compact list UI, invokes store methods, and syncs status text/results after operations.
+ * Inputs: `store` CRUD adapter, serialize/apply callbacks, optional `requestSignIn` (opens auth UI), optional `signOut` (ends session).
+ * Outputs: mounted panel with `element`, `refresh()`, `setSignedIn()`, and `destroy()` methods.
+ * Internal: save while signed out triggers `requestSignIn`; list actions including Load render only after sign-in.
  */
-export function createLandscapeStoragePanel({ store, getCurrentConfig, applyConfig }) {
+export function createLandscapeStoragePanel({ store, getCurrentConfig, applyConfig, requestSignIn, signOut }) {
   const panel = document.createElement('aside');
   panel.setAttribute('aria-label', 'Landscape storage');
   panel.style.position = 'fixed';
@@ -39,7 +39,10 @@ export function createLandscapeStoragePanel({ store, getCurrentConfig, applyConf
   panel.style.boxSizing = 'border-box';
 
   panel.innerHTML = `
-    <h2 style="margin:0 0 8px;font-size:14px;font-weight:600;">Landscapes</h2>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px;">
+      <h2 style="margin:0;font-size:14px;font-weight:600;line-height:1.3;">Landscapes</h2>
+      <button data-landscape-signout type="button" style="${getSecondaryButtonStyle()};display:none;padding:6px 8px;font-size:11px;">Sign out</button>
+    </div>
     <p style="margin:0 0 10px;opacity:0.82;line-height:1.35;">Save terrain presets to Supabase and reload anytime.</p>
     <label style="display:block;margin-bottom:8px;">
       <span style="display:block;margin-bottom:4px;">Name</span>
@@ -58,9 +61,10 @@ export function createLandscapeStoragePanel({ store, getCurrentConfig, applyConf
   const nameInput = panel.querySelector('[data-landscape-name]');
   const saveButton = panel.querySelector('[data-landscape-save]');
   const refreshButton = panel.querySelector('[data-landscape-refresh]');
+  const signOutButton = panel.querySelector('[data-landscape-signout]');
   const status = panel.querySelector('[data-landscape-status]');
   const listRoot = panel.querySelector('[data-landscape-list]');
-  let isDisabled = false;
+  let isSignedIn = false;
 
   /**
    * Updates the panel status text with an info/success/error tone.
@@ -82,9 +86,25 @@ export function createLandscapeStoragePanel({ store, getCurrentConfig, applyConf
   }
 
   /**
-   * Renders landscape entries in the list area with operation buttons.
-   * Inputs: `rows` array returned by `store.list()`.
-   * Outputs: rebuilds list DOM with Load/Rename/Delete actions for each row.
+   * Renders a short hint when the user is not signed in (no cloud list, no Load buttons).
+   * Inputs: none.
+   * Outputs: replaces list container children with a single guidance paragraph.
+   * Internal: avoids calling `store.list` until a session exists.
+   */
+  function renderSignedOutPlaceholder() {
+    listRoot.innerHTML = '';
+    const hint = document.createElement('p');
+    hint.style.margin = '0';
+    hint.style.opacity = '0.85';
+    hint.style.lineHeight = '1.35';
+    hint.textContent = 'Sign in to list your cloud saves. Load appears on each row after you are signed in.';
+    listRoot.appendChild(hint);
+  }
+
+  /**
+   * Renders landscape entries in the list area with Load/Rename/Delete actions for each row.
+   * Inputs: `rows` array returned by `store.list()` (only used when signed in).
+   * Outputs: rebuilds list DOM with action buttons including Load.
    * Internal: clears previous nodes and creates compact action cards on each refresh.
    */
   function renderList(rows) {
@@ -130,7 +150,7 @@ export function createLandscapeStoragePanel({ store, getCurrentConfig, applyConf
    * Internal: calls `store.list` and forwards errors through shared status formatter.
    */
   async function refresh() {
-    if (isDisabled) {
+    if (!isSignedIn) {
       return;
     }
 
@@ -150,7 +170,18 @@ export function createLandscapeStoragePanel({ store, getCurrentConfig, applyConf
    * Internal: serializes active config through `getCurrentConfig` callback before persisting.
    */
   async function handleSaveClick() {
-    if (isDisabled) {
+    if (!isSignedIn) {
+      const name = nameInput.value.trim();
+      if (!name) {
+        setStatus('Enter a name before saving.', 'error');
+        return;
+      }
+      if (typeof requestSignIn === 'function') {
+        requestSignIn();
+        setStatus('Sign in in the dialog to save your landscape.', 'info');
+        return;
+      }
+      setStatus('Cloud sign-in is not available.', 'error');
       return;
     }
 
@@ -179,7 +210,7 @@ export function createLandscapeStoragePanel({ store, getCurrentConfig, applyConf
    * Internal: uses data attributes for action routing with one delegated listener.
    */
   async function handleListClick(event) {
-    if (isDisabled || !(event.target instanceof HTMLButtonElement)) {
+    if (!isSignedIn || !(event.target instanceof HTMLButtonElement)) {
       return;
     }
 
@@ -238,30 +269,51 @@ export function createLandscapeStoragePanel({ store, getCurrentConfig, applyConf
   }
 
   /**
-   * Enables or disables user interaction for auth-gated app states.
-   * Inputs: `nextDisabled` boolean.
-   * Outputs: toggles element disabled states and optionally clears status when locking.
-   * Internal: centralizes UI lock behavior for session changes.
+   * Syncs panel controls and list visibility with Supabase session state.
+   * Inputs: `nextSignedIn` boolean from auth.
+   * Outputs: toggles refresh/sign-out, shows placeholder or awaits `refresh()` from the host when signed in.
+   * Internal: keeps Save enabled while signed out so it can trigger the sign-in modal.
    */
-  function setDisabled(nextDisabled) {
-    isDisabled = nextDisabled;
-    nameInput.disabled = nextDisabled;
-    saveButton.disabled = nextDisabled;
-    refreshButton.disabled = nextDisabled;
-    listRoot.style.pointerEvents = nextDisabled ? 'none' : 'auto';
-    panel.style.opacity = nextDisabled ? '0.56' : '1';
-    if (nextDisabled) {
-      setStatus('Sign in to manage saved landscapes.', 'info');
+  function setSignedIn(nextSignedIn) {
+    isSignedIn = nextSignedIn;
+    nameInput.disabled = false;
+    saveButton.disabled = false;
+    refreshButton.disabled = !nextSignedIn;
+    signOutButton.style.display = nextSignedIn ? 'inline-block' : 'none';
+    listRoot.style.pointerEvents = nextSignedIn ? 'auto' : 'none';
+    panel.style.opacity = '1';
+    if (!nextSignedIn) {
+      renderSignedOutPlaceholder();
+      setStatus('Choose Save Current to sign in. Load appears on each landscape after you sign in.', 'info');
       return;
     }
     setStatus('Storage ready.', 'info');
   }
 
+  /**
+   * Runs cloud sign-out from the landscapes header control.
+   * Inputs: click event from Sign out.
+   * Outputs: awaits optional `signOut` hook; re-enables the button when finished.
+   * Internal: delegates to auth layer supplied by the app entry module.
+   */
+  async function handleSignOutClick() {
+    if (typeof signOut !== 'function') {
+      return;
+    }
+    signOutButton.disabled = true;
+    try {
+      await signOut();
+    } finally {
+      signOutButton.disabled = false;
+    }
+  }
+
   saveButton.addEventListener('click', handleSaveClick);
   refreshButton.addEventListener('click', refresh);
   listRoot.addEventListener('click', handleListClick);
+  signOutButton.addEventListener('click', handleSignOutClick);
 
-  setDisabled(true);
+  setSignedIn(false);
 
   /**
    * Cleans up panel listeners and removes the mounted storage UI.
@@ -273,13 +325,14 @@ export function createLandscapeStoragePanel({ store, getCurrentConfig, applyConf
     saveButton.removeEventListener('click', handleSaveClick);
     refreshButton.removeEventListener('click', refresh);
     listRoot.removeEventListener('click', handleListClick);
+    signOutButton.removeEventListener('click', handleSignOutClick);
     panel.remove();
   }
 
   return {
     element: panel,
     refresh,
-    setDisabled,
+    setSignedIn,
     destroy
   };
 }
