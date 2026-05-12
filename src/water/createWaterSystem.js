@@ -14,8 +14,8 @@ const EDGE_FADE_END = 0.99;
 const REFLECTION_BASE = 0.08;
 const REFLECTION_POWER = 2.4;
 const REFRACTION_BASE = 0.85;
-const REFLECTION_CLIP_OFFSET = 0.11;
-const REFRACTION_CLIP_OFFSET = 0.04;
+const REFLECTION_CLIP_OFFSET = 0.001;
+const REFRACTION_CLIP_OFFSET = 0.001;
 
 /**
  * Builds a water plane with an offscreen terrain reflection pass.

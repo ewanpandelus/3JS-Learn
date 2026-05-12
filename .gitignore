@@ -406,3 +406,5 @@ FodyWeavers.xsd
 # Local planning documents
 plan.md
 plans/
+env/.env.local
+/learning
