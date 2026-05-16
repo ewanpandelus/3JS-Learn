@@ -406,5 +406,15 @@ FodyWeavers.xsd
 # Local planning documents
 plan.md
 plans/
+
+# Personal learning notes (local only)
+learning/
+
+# Secrets and local env (see env/.env.example)
+.env
+.env.local
+.env.*.local
+env/.env
 env/.env.local
-/learning
+env/.env.*.local
+dist/

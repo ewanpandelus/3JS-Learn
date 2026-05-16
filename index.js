@@ -1,5 +1,5 @@
 import { createCoreScene, handleResize } from './src/setup/createCoreScene.js';
-import { OrbitControls } from 'jsm/controls/OrbitControls.js';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { createClient } from '@supabase/supabase-js';
 import { createTerrainRenderer } from './src/terrain/createTerrainRenderer.js';
 import { createTerrainControls } from './src/ui/createTerrainControls.js';
@@ -95,7 +95,10 @@ function initializeAuthentication() {
 
   if (!isSupabaseConfigured()) {
     const { url, anonKey } = getSupabaseConfig();
-    console.warn('Supabase auth disabled. Set url/anonKey in src/config/supabaseConfig.js.', { url, anonKeyLength: anonKey.length });
+    console.warn(
+      'Supabase disabled: set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in env/.env.local (see env/.env.example), or assign globalThis.__SUPABASE_CONFIG__.',
+      { urlLength: url.length, anonKeyLength: anonKey.length }
+    );
     setEditorChromeVisible(true);
     return;
   }
