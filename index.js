@@ -4,7 +4,8 @@ import { createClient } from '@supabase/supabase-js';
 import { createTerrainRenderer } from './src/terrain/createTerrainRenderer.js';
 import { createTerrainControls } from './src/ui/createTerrainControls.js';
 import { createLandscapeStoragePanel } from './src/ui/createLandscapeStoragePanel.js';
-import { createWaterSystem } from './src/water/createWaterSystem.js';
+import { createWaterSystem, DEFAULT_WATER_SETTINGS } from './src/water/createWaterSystem.js';
+import { createWaterControls } from './src/ui/createWaterControls.js';
 import { createAuthOverlay } from './src/auth/createAuthOverlay.js';
 import { getSupabaseConfig, isSupabaseConfigured } from './src/config/supabaseConfig.js';
 import { createLandscapeStore } from './src/persistence/createLandscapeStore.js';
@@ -14,13 +15,15 @@ renderer.setClearColor(0x8aa8c7, 1);
 
 const terrainRenderer = createTerrainRenderer();
 scene.add(terrainRenderer.mesh);
+const initialWaterSettings = { ...DEFAULT_WATER_SETTINGS };
 const waterSystem = createWaterSystem({
   renderer,
   scene,
   camera,
   width: terrainRenderer.settings.width,
   depth: terrainRenderer.settings.depth,
-  seaLevel: terrainRenderer.settings.seaLevel
+  seaLevel: terrainRenderer.settings.seaLevel,
+  waterSettings: initialWaterSettings
 });
 scene.add(waterSystem.water);
 
@@ -33,6 +36,9 @@ const terrainControls = createTerrainControls(terrainRenderer.settings, (patch) 
   if (typeof patch.seaLevel === 'number') {
     waterSystem.updateSeaLevel(patch.seaLevel);
   }
+});
+const waterControls = createWaterControls(initialWaterSettings, (patch) => {
+  waterSystem.updateSettings(patch);
 });
 let storagePanel = null;
 
@@ -138,6 +144,7 @@ function initializeAuthentication() {
 function setEditorChromeVisible(isVisible) {
   const display = isVisible ? 'block' : 'none';
   terrainControls.element.style.display = display;
+  waterControls.element.style.display = display;
   if (storagePanel) {
     storagePanel.element.style.display = display;
   }

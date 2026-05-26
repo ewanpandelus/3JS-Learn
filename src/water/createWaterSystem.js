@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 
 const WATER_SCALE = 9;
-const WAVE_DISTORTION = 0.01;
 const REFLECTION_BIAS = new THREE.Matrix4().set(
   0.5, 0.0, 0.0, 0.5,
   0.0, 0.5, 0.0, 0.5,
@@ -9,28 +8,50 @@ const REFLECTION_BIAS = new THREE.Matrix4().set(
   0.0, 0.0, 0.0, 1.0
 );
 const REFLECTION_MIN_SIZE = 2;
-const EDGE_FADE_START = 0.62;
-const EDGE_FADE_END = 0.99;
-const REFLECTION_BASE = 0.08;
-const REFLECTION_POWER = 2.4;
-const REFRACTION_BASE = 0.85;
+const OPEN_WATER_DEPTH_SAMPLE = 0.999;
 const REFLECTION_CLIP_OFFSET = 0.001;
 const REFRACTION_CLIP_OFFSET = 0.001;
 
 /**
+ * Built-in defaults for water tuning (used when localStorage has no saved snapshot).
+ * Inputs: none (edit this object to change repo defaults).
+ * Outputs: plain settings object passed to the shader and water control panel.
+ * Internal: single source of truth for numeric and hex colour defaults.
+ */
+export const DEFAULT_WATER_SETTINGS = {
+  depthMultiplier: 8,
+  alphaMultiplier: 23.5,
+  shallowDepthFadeStart: 0,
+  shallowDepthFadeEnd: 0.05,
+  waterColourMix: 1,
+  alphaMin: 0.34,
+  alphaMax: 1,
+  reflectionBase: 0,
+  refractionBase: 0,
+  fresnelPower: 0.6,
+  waterColourShallow: '#80f7fa',
+  waterColourDeep: '#0f0f33'
+};
+
+/**
  * Builds a water plane with an offscreen terrain reflection pass.
- * Inputs: `renderer`, `scene`, `camera`, terrain `width`/`depth`, and initial `seaLevel`.
- * Outputs: object containing `water` mesh plus `render`, `resize`, and `updateSeaLevel` hooks.
+ * Inputs: `renderer`, `scene`, `camera`, terrain `width`/`depth`, initial `seaLevel`, optional `waterSettings` partial overrides.
+ * Outputs: object with `water`, `render`, `resize`, `updateSeaLevel`, `getSettings`, and `updateSettings`.
  * Internal: renders reflection/refraction textures with clip planes, then projects those textures in the water shader.
  */
-export function createWaterSystem({ renderer, scene, camera, width, depth, seaLevel }) {
+export function createWaterSystem({ renderer, scene, camera, width, depth, seaLevel, waterSettings = {} }) {
+  const resolvedWater = { ...DEFAULT_WATER_SETTINGS, ...waterSettings };
   const reflectionSize = getReflectionTargetSize(renderer);
   const reflectionTarget = new THREE.WebGLRenderTarget(reflectionSize.x, reflectionSize.y, {
     depthBuffer: true,
     stencilBuffer: false
   });
+  const refractionDepthTexture = new THREE.DepthTexture(reflectionSize.x, reflectionSize.y);
+  refractionDepthTexture.format = THREE.DepthFormat;
+  refractionDepthTexture.type = THREE.UnsignedShortType;
   const refractionTarget = new THREE.WebGLRenderTarget(reflectionSize.x, reflectionSize.y, {
     depthBuffer: true,
+    depthTexture: refractionDepthTexture,
     stencilBuffer: false
   });
   reflectionTarget.texture.colorSpace = THREE.SRGBColorSpace;
@@ -52,22 +73,35 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
     transparent: true,
     depthWrite: false,
     uniforms: {
-      uSeaHalfExtent: { value: new THREE.Vector2((width * WATER_SCALE) * 0.5, (depth * WATER_SCALE) * 0.5) },
       uTime: { value: 0 },
       uReflectionMap: { value: reflectionTarget.texture },
       uReflectionMatrix: { value: reflectionMatrix },
       uRefractionMap: { value: refractionTarget.texture },
       uRefractionMatrix: { value: refractionMatrix },
-      uTint: { value: new THREE.Color(0x2f89c9) },
-      uDeepTint: { value: new THREE.Color(0x13374f) },
+      uDepthMap: { value: refractionDepthTexture },
+      uCameraNear: { value: camera.near },
+      uCameraFar: { value: camera.far },
+      uCameraInverseProjectionMatrix: { value: new THREE.Matrix4() },
+      uCameraMatrixWorld: { value: new THREE.Matrix4() },
+      uSeaLevel: { value: seaLevel },
+      uDepthMultiplier: { value: resolvedWater.depthMultiplier },
+      uAlphaMultiplier: { value: resolvedWater.alphaMultiplier },
+      uShallowDepthFadeStart: { value: resolvedWater.shallowDepthFadeStart },
+      uShallowDepthFadeEnd: { value: resolvedWater.shallowDepthFadeEnd },
+      uWaterColourShallow: { value: new THREE.Color(resolvedWater.waterColourShallow) },
+      uWaterColourDeep: { value: new THREE.Color(resolvedWater.waterColourDeep) },
+      uWaterColourMix: { value: resolvedWater.waterColourMix },
       uSkyTint: { value: new THREE.Color(0x8aa8c7) },
-      uAlphaMin: { value: 0.72 },
-      uAlphaMax: { value: 0.96 },
-      uFresnelPower: { value: REFLECTION_POWER }
+      uAlphaMin: { value: resolvedWater.alphaMin },
+      uAlphaMax: { value: resolvedWater.alphaMax },
+      uFresnelPower: { value: resolvedWater.fresnelPower },
+      uReflectionBase: { value: resolvedWater.reflectionBase },
+      uRefractionBase: { value: resolvedWater.refractionBase }
     },
     vertexShader: `
       varying vec3 vWorldPos;
       varying vec2 vUv;
+      varying vec4 vClipSpace;
       varying vec4 vReflectionCoord;
       varying vec4 vRefractionCoord;
       uniform mat4 uReflectionMatrix;
@@ -76,53 +110,92 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
         vUv = uv;
         vec4 world = modelMatrix * vec4(position, 1.0);
         vWorldPos = world.xyz;
+        vClipSpace = projectionMatrix * viewMatrix * world;
         vReflectionCoord = uReflectionMatrix * world;
         vRefractionCoord = uRefractionMatrix * world;
-        gl_Position = projectionMatrix * viewMatrix * world;
+        gl_Position = vClipSpace;
       }
     `,
     fragmentShader: `
-      uniform vec2 uSeaHalfExtent;
       uniform float uTime;
       uniform sampler2D uReflectionMap;
       uniform sampler2D uRefractionMap;
-      uniform vec3 uTint;
-      uniform vec3 uDeepTint;
+      uniform sampler2D uDepthMap;
+      uniform float uCameraNear;
+      uniform float uCameraFar;
+      uniform mat4 uCameraInverseProjectionMatrix;
+      uniform mat4 uCameraMatrixWorld;
+      uniform float uSeaLevel;
+      uniform float uDepthMultiplier;
+      uniform float uAlphaMultiplier;
+      uniform float uShallowDepthFadeStart;
+      uniform float uShallowDepthFadeEnd;
+      uniform vec3 uWaterColourShallow;
+      uniform vec3 uWaterColourDeep;
+      uniform float uWaterColourMix;
       uniform vec3 uSkyTint;
       uniform float uAlphaMin;
       uniform float uAlphaMax;
       uniform float uFresnelPower;
+      uniform float uReflectionBase;
+      uniform float uRefractionBase;
       varying vec3 vWorldPos;
       varying vec2 vUv;
+      varying vec4 vClipSpace;
       varying vec4 vReflectionCoord;
       varying vec4 vRefractionCoord;
 
+      float getWaterColumnDepth(const in vec2 depthUv) {
+        float packedDepth = texture2D(uDepthMap, depthUv).r;
+        if (packedDepth >= ${OPEN_WATER_DEPTH_SAMPLE.toFixed(3)}) {
+          return uShallowDepthFadeEnd + 1.0;
+        }
+        vec2 ndcXY = depthUv * 2.0 - 1.0;
+        float ndcZ = packedDepth * 2.0 - 1.0;
+        vec4 clipPos = vec4(ndcXY, ndcZ, 1.0);
+        vec4 viewPos = uCameraInverseProjectionMatrix * clipPos;
+        viewPos /= viewPos.w;
+        vec4 worldPos = uCameraMatrixWorld * viewPos;
+        return uSeaLevel - worldPos.y;
+      }
+
       void main() {
+        vec2 depthUv = (vClipSpace.xy / vClipSpace.w) * 0.5 + 0.5;
+        depthUv = clamp(depthUv, 0.001, 0.999);
+
+        float waterColumnDepth = getWaterColumnDepth(depthUv);
+        float shoreFade = smoothstep(uShallowDepthFadeStart, uShallowDepthFadeEnd, waterColumnDepth);
+        float opticalDepth = 1.0 - exp(-max(waterColumnDepth, 0.0) * uDepthMultiplier);
+        float depthAlpha = (1.0 - exp(-max(waterColumnDepth, 0.0) * uAlphaMultiplier)) * shoreFade;
+
+        vec3 waterColour = mix(uWaterColourShallow, uWaterColourDeep, opticalDepth);
+
         float wave =
           sin(vWorldPos.x * 0.18 + uTime * 0.8) * 0.5 +
           cos(vWorldPos.z * 0.23 - uTime * 0.65) * 0.5;
         float ripple = 0.5 + wave * 0.5;
-        vec3 base = mix(uTint, uDeepTint, smoothstep(0.0, 1.0, vUv.y + wave * ${WAVE_DISTORTION.toFixed(5)}));
+
         vec3 viewVector = normalize(cameraPosition - vWorldPos);
         float ndotv = clamp(dot(viewVector, vec3(0.0, 1.0, 0.0)), 0.0, 1.0);
         float fresnel = pow(1.0 - ndotv, uFresnelPower);
+        float refractiveFactor = pow(ndotv, 2.0);
+
         vec2 reflectionUv = vReflectionCoord.xy / max(vReflectionCoord.w, 0.00001);
         vec2 refractionUv = vRefractionCoord.xy / max(vRefractionCoord.w, 0.00001);
         reflectionUv = clamp(reflectionUv, 0.001, 0.999);
         refractionUv = clamp(refractionUv, 0.001, 0.999);
+
         vec3 reflectionColor = texture2D(uReflectionMap, reflectionUv).rgb;
         vec3 refractionColor = texture2D(uRefractionMap, refractionUv).rgb;
-        float reflectionWeight = clamp(${REFLECTION_BASE.toFixed(2)} + fresnel, 0.0, 1.0);
-        float refractionWeight = clamp(${REFRACTION_BASE.toFixed(2)} * (1.0 - fresnel), 0.0, 1.0);
-        vec3 refracted = mix(base, refractionColor, refractionWeight);
-        vec3 reflectionBlend = mix(refracted, reflectionColor, reflectionWeight);
-        vec3 color = mix(reflectionBlend, uSkyTint, fresnel * 0.12) + vec3(ripple * 0.025);
 
-        vec2 edgeNorm = abs(vWorldPos.xz) / uSeaHalfExtent;
-        float edgeDistance = max(edgeNorm.x, edgeNorm.y);
-        float outerFade = 1.0 - smoothstep(${EDGE_FADE_START.toFixed(2)}, ${EDGE_FADE_END.toFixed(2)}, edgeDistance);
+        float reflectionWeight = clamp(uReflectionBase + fresnel, 0.0, 1.0);
+        float refractionWeight = clamp(uRefractionBase * (1.0 - fresnel), 0.0, 1.0);
+        vec3 refracted = mix(waterColour, refractionColor, refractionWeight);
+        vec3 color = mix(refracted, reflectionColor, reflectionWeight);
+        color = mix(color, uSkyTint, fresnel * 0.12) + vec3(ripple * 0.025);
+
         float angleAlpha = mix(uAlphaMin, uAlphaMax, fresnel);
-        float alpha = angleAlpha * outerFade;
+        float alpha = angleAlpha * depthAlpha;
         gl_FragColor = vec4(color, alpha);
       }
     `
@@ -130,6 +203,7 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
 
   const water = new THREE.Mesh(waterGeometry, waterMaterial);
   water.position.y = seaLevel;
+  water.renderOrder = 1;
   water.receiveShadow = false;
   water.castShadow = false;
 
@@ -143,6 +217,21 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
     waterMaterial.uniforms.uTime.value = time;
     renderReflectionTexture();
     renderRefractionTexture();
+    updateDepthUniforms();
+  }
+
+  /**
+   * Syncs camera matrices and sea level for world-space depth reconstruction.
+   * Inputs: none; reads active `camera` and water mesh position.
+   * Outputs: updates depth-related uniforms on `waterMaterial`.
+   * Internal: copies inverse projection, world matrix, clip distances, and sea level each frame.
+   */
+  function updateDepthUniforms() {
+    waterMaterial.uniforms.uCameraNear.value = camera.near;
+    waterMaterial.uniforms.uCameraFar.value = camera.far;
+    waterMaterial.uniforms.uCameraInverseProjectionMatrix.value.copy(camera.projectionMatrixInverse);
+    waterMaterial.uniforms.uCameraMatrixWorld.value.copy(camera.matrixWorld);
+    waterMaterial.uniforms.uSeaLevel.value = water.position.y;
   }
 
   /**
@@ -167,6 +256,7 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
    */
   function updateSeaLevel(nextSeaLevel) {
     water.position.y = nextSeaLevel;
+    waterMaterial.uniforms.uSeaLevel.value = nextSeaLevel;
   }
 
   /**
@@ -257,11 +347,83 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
     renderer.setRenderTarget(previousRenderTarget);
   }
 
+  /**
+   * Reads current tunable water shader values.
+   * Inputs: none.
+   * Outputs: plain settings object matching `DEFAULT_WATER_SETTINGS` keys.
+   * Internal: copies live uniform values and encodes colours as hex strings.
+   */
+  function getSettings() {
+    const uniforms = waterMaterial.uniforms;
+    return {
+      depthMultiplier: uniforms.uDepthMultiplier.value,
+      alphaMultiplier: uniforms.uAlphaMultiplier.value,
+      shallowDepthFadeStart: uniforms.uShallowDepthFadeStart.value,
+      shallowDepthFadeEnd: uniforms.uShallowDepthFadeEnd.value,
+      waterColourMix: uniforms.uWaterColourMix.value,
+      alphaMin: uniforms.uAlphaMin.value,
+      alphaMax: uniforms.uAlphaMax.value,
+      reflectionBase: uniforms.uReflectionBase.value,
+      refractionBase: uniforms.uRefractionBase.value,
+      fresnelPower: uniforms.uFresnelPower.value,
+      waterColourShallow: `#${uniforms.uWaterColourShallow.value.getHexString()}`,
+      waterColourDeep: `#${uniforms.uWaterColourDeep.value.getHexString()}`
+    };
+  }
+
+  /**
+   * Applies partial water settings to shader uniforms.
+   * Inputs: `patch` object with any subset of tunable water keys.
+   * Outputs: mutates `waterMaterial` uniforms immediately.
+   * Internal: maps each known key to its matching uniform value or colour object.
+   */
+  function updateSettings(patch) {
+    const uniforms = waterMaterial.uniforms;
+    if (typeof patch.depthMultiplier === 'number') {
+      uniforms.uDepthMultiplier.value = patch.depthMultiplier;
+    }
+    if (typeof patch.alphaMultiplier === 'number') {
+      uniforms.uAlphaMultiplier.value = patch.alphaMultiplier;
+    }
+    if (typeof patch.shallowDepthFadeStart === 'number') {
+      uniforms.uShallowDepthFadeStart.value = patch.shallowDepthFadeStart;
+    }
+    if (typeof patch.shallowDepthFadeEnd === 'number') {
+      uniforms.uShallowDepthFadeEnd.value = patch.shallowDepthFadeEnd;
+    }
+    if (typeof patch.waterColourMix === 'number') {
+      uniforms.uWaterColourMix.value = patch.waterColourMix;
+    }
+    if (typeof patch.alphaMin === 'number') {
+      uniforms.uAlphaMin.value = patch.alphaMin;
+    }
+    if (typeof patch.alphaMax === 'number') {
+      uniforms.uAlphaMax.value = patch.alphaMax;
+    }
+    if (typeof patch.reflectionBase === 'number') {
+      uniforms.uReflectionBase.value = patch.reflectionBase;
+    }
+    if (typeof patch.refractionBase === 'number') {
+      uniforms.uRefractionBase.value = patch.refractionBase;
+    }
+    if (typeof patch.fresnelPower === 'number') {
+      uniforms.uFresnelPower.value = patch.fresnelPower;
+    }
+    if (typeof patch.waterColourShallow === 'string') {
+      uniforms.uWaterColourShallow.value.set(patch.waterColourShallow);
+    }
+    if (typeof patch.waterColourDeep === 'string') {
+      uniforms.uWaterColourDeep.value.set(patch.waterColourDeep);
+    }
+  }
+
   return {
     water,
     render,
     resize,
-    updateSeaLevel
+    updateSeaLevel,
+    getSettings,
+    updateSettings
   };
 }
 

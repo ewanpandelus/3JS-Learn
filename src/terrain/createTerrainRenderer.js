@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { createNoise2D } from 'https://cdn.jsdelivr.net/npm/simplex-noise@4.0.1/dist/esm/simplex-noise.js';
 
-const TERRAIN_WIDTH = 14;
-const TERRAIN_DEPTH = 14;
-const TERRAIN_SEGMENTS = 180;
+const TERRAIN_WIDTH = 16;
+const TERRAIN_DEPTH = 16;
+const TERRAIN_SEGMENTS = 240;
 const TERRAIN_SEA_LEVEL = -0.18;
 const TERRAIN_PERSISTENCE = 0.5;
 const TERRAIN_SEED = 1337;
@@ -16,7 +16,7 @@ const DEFAULT_TERRAIN_SETTINGS = {
   segments: TERRAIN_SEGMENTS,
   seaLevel: TERRAIN_SEA_LEVEL,
   amplitude: 1.1,
-  frequency: 1.1,
+  frequency: 0.24,
   octaves: 5,
   lacunarity: 2,
   persistence: TERRAIN_PERSISTENCE,
