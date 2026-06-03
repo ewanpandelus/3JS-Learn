@@ -1,8 +1,9 @@
 import { createCoreScene, handleResize } from './src/setup/createCoreScene.js';
+import { SKY_COLOR } from './src/config/worldExtents.js';
 import { OrbitControls } from 'jsm/controls/OrbitControls.js';
 import { createClient } from '@supabase/supabase-js';
 import { createTerrainRenderer } from './src/terrain/createTerrainRenderer.js';
-import { createTerrainControls } from './src/ui/createTerrainControls.js';
+import { createSceneEditorPanel } from './src/ui/createSceneEditorPanel.js';
 import { createLandscapeStoragePanel } from './src/ui/createLandscapeStoragePanel.js';
 import {
   createWaterSystem,
@@ -10,13 +11,12 @@ import {
   DEFAULT_WATER_SURFACE_WIDTH,
   DEFAULT_WATER_SURFACE_DEPTH
 } from './src/water/createWaterSystem.js';
-import { createWaterControls } from './src/ui/createWaterControls.js';
 import { createAuthOverlay } from './src/auth/createAuthOverlay.js';
 import { getSupabaseConfig, isSupabaseConfigured } from './src/config/supabaseConfig.js';
 import { createLandscapeStore } from './src/persistence/createLandscapeStore.js';
 
 const { renderer, scene, camera } = createCoreScene();
-renderer.setClearColor(0x8aa8c7, 1);
+renderer.setClearColor(SKY_COLOR, 1);
 
 const terrainRenderer = createTerrainRenderer();
 scene.add(terrainRenderer.mesh);
@@ -36,14 +36,18 @@ camera.position.set(6, 7, 11);
 camera.lookAt(0, 0, 0);
 const controls = setupCameraControls(camera, renderer.domElement);
 
-const terrainControls = createTerrainControls(terrainRenderer.settings, (patch) => {
-  terrainRenderer.update(patch);
-  if (typeof patch.seaLevel === 'number') {
-    waterSystem.updateSeaLevel(patch.seaLevel);
+const sceneEditor = createSceneEditorPanel({
+  terrainSettings: terrainRenderer.settings,
+  waterSettings: initialWaterSettings,
+  onTerrainChange: (patch) => {
+    terrainRenderer.update(patch);
+    if (typeof patch.seaLevel === 'number') {
+      waterSystem.updateSeaLevel(patch.seaLevel);
+    }
+  },
+  onWaterChange: (patch) => {
+    waterSystem.updateSettings(patch);
   }
-});
-const waterControls = createWaterControls(initialWaterSettings, (patch) => {
-  waterSystem.updateSettings(patch);
 });
 let storagePanel = null;
 
@@ -148,8 +152,7 @@ function initializeAuthentication() {
  */
 function setEditorChromeVisible(isVisible) {
   const display = isVisible ? 'block' : 'none';
-  terrainControls.element.style.display = display;
-  waterControls.element.style.display = display;
+  sceneEditor.element.style.display = display;
   if (storagePanel) {
     storagePanel.element.style.display = display;
   }
@@ -183,7 +186,7 @@ function applySavedLandscapeConfig(config) {
   if (typeof terrainSettings.seaLevel === 'number') {
     waterSystem.updateSeaLevel(terrainSettings.seaLevel);
   }
-  terrainControls.setValues(terrainSettings);
+  sceneEditor.setTerrainValues(terrainSettings);
 }
 
 /**

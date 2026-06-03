@@ -1,8 +1,6 @@
 import * as THREE from 'three';
-import { TERRAIN_EXTENT, WATER_SURFACE_WIDTH } from '../config/worldExtents.js';
+import { SKY_COLOR, SKY_FOG_FAR, SKY_FOG_NEAR, TERRAIN_EXTENT } from '../config/worldExtents.js';
 
-const FOG_NEAR = TERRAIN_EXTENT * 0.75;
-const FOG_FAR = WATER_SURFACE_WIDTH * 0.45;
 const SHADOW_HALF_EXTENT = TERRAIN_EXTENT * 0.85;
 
 /**
@@ -20,7 +18,8 @@ export function createCoreScene() {
   document.body.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0x8aa8c7, FOG_NEAR, FOG_FAR);
+  scene.background = new THREE.Color(SKY_COLOR);
+  scene.fog = new THREE.Fog(SKY_COLOR, SKY_FOG_NEAR, SKY_FOG_FAR);
 
   const camera = new THREE.PerspectiveCamera(
     75,

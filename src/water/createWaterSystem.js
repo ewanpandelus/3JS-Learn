@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 
 import {
+  SKY_COLOR,
   WATER_SURFACE_DEPTH,
   WATER_SURFACE_MARGIN_SCALE,
   WATER_SURFACE_WIDTH
@@ -98,6 +99,7 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
   const waterMaterial = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
+    fog: false,
     uniforms: {
       uTime: { value: 0 },
       uReflectionMap: { value: reflectionTarget.texture },
@@ -118,7 +120,7 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
       uWaterColourShallow: { value: new THREE.Color(resolvedWater.waterColourShallow) },
       uWaterColourDeep: { value: new THREE.Color(resolvedWater.waterColourDeep) },
       uWaterColourMix: { value: resolvedWater.waterColourMix },
-      uSkyTint: { value: new THREE.Color(0x8aa8c7) },
+      uSkyTint: { value: new THREE.Color(SKY_COLOR) },
       uAlphaMin: { value: resolvedWater.alphaMin },
       uAlphaMax: { value: resolvedWater.alphaMax },
       uFresnelPower: { value: resolvedWater.fresnelPower },
