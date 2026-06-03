@@ -13,9 +13,51 @@ export const DEFAULT_ISLAND_SETTINGS = {
   edgeNoiseFrequency: 0.42
 };
 
-const LAYER_SEED_STRIDE = 7919;
-const LAYER_OFFSET_STRIDE_X = 17.3;
-const LAYER_OFFSET_STRIDE_Z = -11.7;
+/** Default seed for mountain layer noise (independent of island base seed). */
+export const DEFAULT_MOUNTAIN_SEED = 1337;
+/** Maximum mountain seed value accepted by the editor. */
+export const MOUNTAIN_SEED_MAX = 999999;
+/** Prime stride between per-layer simplex seeds. */
+const LAYER_SEED_STRIDE = 104729;
+/** World-space X pan between mountain layer noise samples. */
+const LAYER_SAMPLE_PAN_X = 41.9;
+/** World-space Z pan between mountain layer noise samples. */
+const LAYER_SAMPLE_PAN_Z = 27.3;
+
+/**
+ * Returns seed and UV pan for one layer index so samples do not share the same noise patch.
+ * Inputs: `index` layer position (0-based).
+ * Outputs: `{ seedOffset, offsetX, offsetZ }` object.
+ * Internal: uses index + 1 so layer 0 still pans away from the island base origin.
+ */
+export function getLayerSampleSpace(index) {
+  const layerSlot = index + 1;
+  return {
+    seedOffset: 1000 + index * LAYER_SEED_STRIDE,
+    offsetX: layerSlot * LAYER_SAMPLE_PAN_X,
+    offsetZ: layerSlot * LAYER_SAMPLE_PAN_Z * -1
+  };
+}
+
+/**
+ * Merges stored layer fields with defaults without clobbering sampling identity.
+ * Inputs: `layer` partial layer, `index` position in the stack.
+ * Outputs: complete layer settings object.
+ * Internal: only fills seed/offset/persistence when missing on the stored layer.
+ */
+export function mergeLayerWithDefaults(layer, index) {
+  const defaults = createDefaultTerrainLayer(index);
+  const sampleSpace = getLayerSampleSpace(index);
+  return {
+    ...defaults,
+    ...layer,
+    seedOffset: typeof layer?.seedOffset === 'number' ? layer.seedOffset : sampleSpace.seedOffset,
+    offsetX: typeof layer?.offsetX === 'number' ? layer.offsetX : sampleSpace.offsetX,
+    offsetZ: typeof layer?.offsetZ === 'number' ? layer.offsetZ : sampleSpace.offsetZ,
+    persistence: typeof layer?.persistence === 'number' ? layer.persistence : defaults.persistence,
+    enabled: layer?.enabled !== false
+  };
+}
 
 /**
  * Creates default noise settings for one stackable mountain layer.
@@ -30,9 +72,7 @@ export function createDefaultTerrainLayer(index = 0, overrides = {}) {
     octaves: 5,
     lacunarity: 2.2,
     persistence: 0.48,
-    seedOffset: 1000 + index * LAYER_SEED_STRIDE,
-    offsetX: index * LAYER_OFFSET_STRIDE_X,
-    offsetZ: index * LAYER_OFFSET_STRIDE_Z,
+    ...getLayerSampleSpace(index),
     enabled: true,
     ...overrides
   };
@@ -48,6 +88,12 @@ export function normalizeTerrainSettings(settings = {}) {
   const normalized = { ...settings };
   normalized.baseLayer = { ...DEFAULT_BASE_LAYER, ...(normalized.baseLayer ?? {}) };
   normalized.island = { ...DEFAULT_ISLAND_SETTINGS, ...(normalized.island ?? {}) };
+  normalized.mountainSeed =
+    typeof normalized.mountainSeed === 'number'
+      ? Math.max(0, Math.min(MOUNTAIN_SEED_MAX, Math.round(normalized.mountainSeed)))
+      : typeof normalized.seed === 'number'
+        ? Math.max(0, Math.min(MOUNTAIN_SEED_MAX, Math.round(normalized.seed)))
+        : DEFAULT_MOUNTAIN_SEED;
 
   const legacyNoise =
     typeof settings.amplitude === 'number' ||
@@ -68,11 +114,27 @@ export function normalizeTerrainSettings(settings = {}) {
     ];
   }
 
-  normalized.layers = layers.map((layer, index) => ({
-    ...createDefaultTerrainLayer(index),
-    ...layer,
-    enabled: layer?.enabled !== false
-  }));
+  normalized.layers = ensureDistinctLayerSampleSpaces(
+    layers.map((layer, index) => mergeLayerWithDefaults(layer, index))
+  );
 
   return normalized;
+}
+
+/**
+ * Reassigns pan/seed when two layers share the same sampling coordinates.
+ * Inputs: `layers` array of layer settings.
+ * Outputs: new array with unique `seedOffset` / `offsetX` / `offsetZ` per index.
+ * Internal: keeps the first occurrence and re-pans duplicates via `getLayerSampleSpace`.
+ */
+export function ensureDistinctLayerSampleSpaces(layers) {
+  const usedKeys = new Set();
+  return layers.map((layer, index) => {
+    const sampleKey = `${layer.seedOffset}|${layer.offsetX}|${layer.offsetZ}`;
+    if (!usedKeys.has(sampleKey)) {
+      usedKeys.add(sampleKey);
+      return layer;
+    }
+    return mergeLayerWithDefaults({ ...layer, ...getLayerSampleSpace(index) }, index);
+  });
 }

@@ -108,9 +108,9 @@ export function createTerrainControls(initialSettings, onChange) {
           <button type="button" data-remove-layer="${index}" style="font-size:11px;padding:2px 8px;cursor:pointer;">Remove</button>
         </div>
         ${buildControl('Amplitude (noise scale)', 'amplitude', 'range', { min: 0, max: 3, step: 0.01, value: layer.amplitude })}
-        ${buildControl('Frequency', 'frequency', 'range', { min: 0.1, max: 3, step: 0.01, value: layer.frequency })}
-        ${buildControl('Octaves', 'octaves', 'range', { min: 1, max: 8, step: 1, value: layer.octaves })}
-        ${buildControl('Lacunarity', 'lacunarity', 'range', { min: 1.2, max: 3.2, step: 0.01, value: layer.lacunarity })}
+        ${buildControl('Frequency', 'frequency', 'range', { min: 0, max: 3, step: 0.01, value: layer.frequency })}
+        ${buildControl('Octaves', 'octaves', 'range', { min: 0, max: 8, step: 1, value: layer.octaves })}
+        ${buildControl('Lacunarity', 'lacunarity', 'range', { min: 0, max: 3.2, step: 0.01, value: layer.lacunarity })}
       </section>
     `;
   }
@@ -135,7 +135,7 @@ export function createTerrainControls(initialSettings, onChange) {
       <section data-base-panel>
         <strong style="font-size:13px;">Island base (layer 1)</strong>
         ${buildControl('Surface amplitude', 'baseAmplitude', 'range', { min: 0, max: 0.8, step: 0.01, value: baseLayer.amplitude })}
-        ${buildControl('Surface frequency', 'baseFrequency', 'range', { min: 0.05, max: 1.5, step: 0.01, value: baseLayer.frequency })}
+        ${buildControl('Surface frequency', 'baseFrequency', 'range', { min: 0, max: 1.5, step: 0.01, value: baseLayer.frequency })}
       </section>
       <div data-layers-root>
         ${layers.map((layer, index) => buildLayerPanelHtml(layer, index)).join('')}

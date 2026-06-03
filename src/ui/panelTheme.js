@@ -211,6 +211,20 @@ export function ensurePanelStyles() {
       border-radius: 10px;
       font-size: 12px;
     }
+    .editor-seed-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: end;
+      margin-bottom: 12px;
+    }
+    .editor-seed-row .editor-control {
+      margin-top: 0;
+    }
+    .editor-seed-row .editor-btn--ghost {
+      margin-bottom: 2px;
+      white-space: nowrap;
+    }
   `;
   document.head.appendChild(style);
 }

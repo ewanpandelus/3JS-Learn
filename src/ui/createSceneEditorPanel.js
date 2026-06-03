@@ -1,7 +1,10 @@
 import {
   createDefaultTerrainLayer,
   DEFAULT_BASE_LAYER,
-  DEFAULT_ISLAND_SETTINGS
+  DEFAULT_ISLAND_SETTINGS,
+  DEFAULT_MOUNTAIN_SEED,
+  mergeLayerWithDefaults,
+  MOUNTAIN_SEED_MAX
 } from '../terrain/terrainLayers.js';
 import { applyPanelChrome, buildControl, ensurePanelStyles } from './panelTheme.js';
 
@@ -33,6 +36,10 @@ export function createSceneEditorPanel({
   let colorLow = terrainSettings.colorLow;
   let colorHigh = terrainSettings.colorHigh;
   let water = { ...waterSettings };
+  let mountainSeed =
+    typeof terrainSettings.mountainSeed === 'number'
+      ? terrainSettings.mountainSeed
+      : DEFAULT_MOUNTAIN_SEED;
 
   let activeTab = 'island';
   let pendingTerrainPatch = {};
@@ -84,7 +91,7 @@ export function createSceneEditorPanel({
   function emitTerrainLayers() {
     onTerrainChange({
       baseLayer: { ...baseLayer },
-      layers: layers.map((layer, index) => ({ ...createDefaultTerrainLayer(index), ...layer }))
+      layers: layers.map((layer, index) => mergeLayerWithDefaults(layer, index))
     });
   }
 
@@ -140,17 +147,19 @@ export function createSceneEditorPanel({
       const parsed = readLayerFromPanel(layerPanel);
       const previous = layers[index] ?? createDefaultTerrainLayer(index);
       if (!parsed) {
-        return { ...createDefaultTerrainLayer(index), ...previous };
+        return mergeLayerWithDefaults(previous, index);
       }
-      return {
-        ...createDefaultTerrainLayer(index),
-        ...previous,
-        amplitude: parsed.amplitude,
-        frequency: parsed.frequency,
-        octaves: parsed.octaves,
-        lacunarity: parsed.lacunarity,
-        enabled: parsed.enabled
-      };
+      return mergeLayerWithDefaults(
+        {
+          ...previous,
+          amplitude: parsed.amplitude,
+          frequency: parsed.frequency,
+          octaves: parsed.octaves,
+          lacunarity: parsed.lacunarity,
+          enabled: parsed.enabled
+        },
+        index
+      );
     });
   }
 
@@ -174,9 +183,9 @@ export function createSceneEditorPanel({
         </summary>
         <div class="editor-layer__body">
           ${buildControl('Amplitude', layerInputName(index, 'amplitude'), 'range', { min: 0, max: 3, step: 0.01, value: layer.amplitude })}
-          ${buildControl('Frequency', layerInputName(index, 'frequency'), 'range', { min: 0.1, max: 3, step: 0.01, value: layer.frequency })}
-          ${buildControl('Octaves', layerInputName(index, 'octaves'), 'range', { min: 1, max: 8, step: 1, value: layer.octaves })}
-          ${buildControl('Lacunarity', layerInputName(index, 'lacunarity'), 'range', { min: 1.2, max: 3.2, step: 0.01, value: layer.lacunarity })}
+          ${buildControl('Frequency', layerInputName(index, 'frequency'), 'range', { min: 0, max: 3, step: 0.01, value: layer.frequency })}
+          ${buildControl('Octaves', layerInputName(index, 'octaves'), 'range', { min: 0, max: 8, step: 1, value: layer.octaves })}
+          ${buildControl('Lacunarity', layerInputName(index, 'lacunarity'), 'range', { min: 0, max: 3.2, step: 0.01, value: layer.lacunarity })}
         </div>
       </details>
     `;
@@ -200,10 +209,10 @@ export function createSceneEditorPanel({
         <section data-island-panel>
           <p class="editor-section-title">Plateau surface</p>
           ${buildControl('Surface amplitude', 'baseAmplitude', 'range', { min: 0, max: 0.8, step: 0.01, value: baseLayer.amplitude })}
-          ${buildControl('Surface frequency', 'baseFrequency', 'range', { min: 0.05, max: 1.5, step: 0.01, value: baseLayer.frequency })}
+          ${buildControl('Surface frequency', 'baseFrequency', 'range', { min: 0, max: 1.5, step: 0.01, value: baseLayer.frequency })}
           <p class="editor-section-title" style="margin-top:14px;">Coast edge</p>
           ${buildControl('Edge noise height', 'edgeNoiseAmplitude', 'range', { min: 0, max: 0.35, step: 0.01, value: island.edgeNoiseAmplitude })}
-          ${buildControl('Edge noise scale', 'edgeNoiseFrequency', 'range', { min: 0.1, max: 2, step: 0.01, value: island.edgeNoiseFrequency })}
+          ${buildControl('Edge noise scale', 'edgeNoiseFrequency', 'range', { min: 0, max: 2, step: 0.01, value: island.edgeNoiseFrequency })}
         </section>
       `;
       return;
@@ -216,6 +225,10 @@ export function createSceneEditorPanel({
 
       body.innerHTML = `
         <p class="editor-panel__hint" style="margin:0 0 12px;">Stack noise layers; amplitude scales hills only.</p>
+        <section data-layers-settings class="editor-seed-row">
+          ${buildControl('Mountain seed', 'mountainSeed', 'number', { min: 0, max: MOUNTAIN_SEED_MAX, step: 1, value: mountainSeed })}
+          <button type="button" class="editor-btn editor-btn--ghost" data-randomise-mountain-seed>Randomise</button>
+        </section>
         <div data-layers-root>${layersHtml}</div>
         <button type="button" class="editor-btn editor-btn--primary" data-add-layer>Add mountain layer</button>
       `;
@@ -327,8 +340,13 @@ export function createSceneEditorPanel({
       updateLayerSummary(layerPanel);
     }
 
-    const inIslandPanel = target.closest('[data-island-panel]');
-    if (inIslandPanel) {
+    if (target.name === 'mountainSeed') {
+      mountainSeed = Math.max(0, Math.min(MOUNTAIN_SEED_MAX, Number.parseInt(target.value, 10) || 0));
+      if (valueBubble) {
+        valueBubble.textContent = String(mountainSeed);
+      }
+      Object.assign(pendingTerrainPatch, { mountainSeed });
+    } else if (target.closest('[data-island-panel]')) {
       if (target.name === 'baseAmplitude') {
         baseLayer.amplitude = nextValue;
       }
@@ -408,6 +426,42 @@ export function createSceneEditorPanel({
   }
 
   /**
+   * Reads the mountain seed number input into module state.
+   * Inputs: none.
+   * Outputs: updates `mountainSeed` when the input is present.
+   * Internal: clamps to `MOUNTAIN_SEED_MAX` and rounds to an integer.
+   */
+  function syncMountainSeedFromDom() {
+    const input = panel.querySelector('input[name="mountainSeed"]');
+    if (!(input instanceof HTMLInputElement)) {
+      return;
+    }
+    mountainSeed = Math.max(0, Math.min(MOUNTAIN_SEED_MAX, Number.parseInt(input.value, 10) || 0));
+  }
+
+  /**
+   * Assigns a new random mountain seed and pushes it to the terrain renderer.
+   * Inputs: none.
+   * Outputs: invokes `onTerrainChange` with `{ mountainSeed }`.
+   * Internal: updates the seed field in the Layers tab when it is visible.
+   */
+  function randomiseMountainSeed() {
+    mountainSeed = Math.floor(Math.random() * (MOUNTAIN_SEED_MAX + 1));
+    onTerrainChange({ mountainSeed });
+    if (activeTab !== 'layers') {
+      return;
+    }
+    const input = panel.querySelector('input[name="mountainSeed"]');
+    const valueBubble = panel.querySelector('[data-value="mountainSeed"]');
+    if (input instanceof HTMLInputElement) {
+      input.value = String(mountainSeed);
+    }
+    if (valueBubble) {
+      valueBubble.textContent = String(mountainSeed);
+    }
+  }
+
+  /**
    * Switches the visible editor tab.
    * Inputs: click `event` from a tab button.
    * Outputs: updates `activeTab` and re-renders tab body.
@@ -420,12 +474,27 @@ export function createSceneEditorPanel({
     }
     if (activeTab === 'layers') {
       syncLayersFromDom();
+      syncMountainSeedFromDom();
     }
     activeTab = tabButton.getAttribute('data-tab') ?? 'island';
     renderActiveTab();
   }
 
+  /**
+   * Handles panel button clicks such as mountain seed randomise.
+   * Inputs: native DOM `click` event.
+   * Outputs: may call `randomiseMountainSeed`.
+   * Internal: ignores clicks outside `[data-randomise-mountain-seed]`.
+   */
+  function handlePanelClick(event) {
+    if (!event.target.closest('[data-randomise-mountain-seed]')) {
+      return;
+    }
+    randomiseMountainSeed();
+  }
+
   panel.querySelector('.editor-tabs')?.addEventListener('click', handleTabClick);
+  panel.addEventListener('click', handlePanelClick);
   panel.addEventListener('input', handleInput);
   panel.addEventListener('change', handleChange);
 
@@ -444,6 +513,9 @@ export function createSceneEditorPanel({
     if (nextSettings?.island) {
       island = { ...island, ...nextSettings.island };
     }
+    if (typeof nextSettings?.mountainSeed === 'number') {
+      mountainSeed = nextSettings.mountainSeed;
+    }
     if (Array.isArray(nextSettings?.layers)) {
       layers = nextSettings.layers.map((layer, index) => ({
         ...createDefaultTerrainLayer(index),
@@ -460,7 +532,7 @@ export function createSceneEditorPanel({
     renderActiveTab();
 
     for (const [key, value] of Object.entries(nextSettings ?? {})) {
-      if (key === 'baseLayer' || key === 'island' || key === 'layers') {
+      if (key === 'baseLayer' || key === 'island' || key === 'layers' || key === 'mountainSeed') {
         continue;
       }
       const input = panel.querySelector(`input[name="${key}"]`);
@@ -498,6 +570,7 @@ export function createSceneEditorPanel({
    * Internal: cancels any pending animation frame before removing the element.
    */
   function destroy() {
+    panel.removeEventListener('click', handlePanelClick);
     panel.removeEventListener('input', handleInput);
     panel.removeEventListener('change', handleChange);
     if (terrainFrameRequestId !== null) {

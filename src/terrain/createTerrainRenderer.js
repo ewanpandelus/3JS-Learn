@@ -41,6 +41,7 @@ const DEFAULT_TERRAIN_SETTINGS = {
   segments: TERRAIN_SEGMENTS,
   seaLevel: TERRAIN_SEA_LEVEL,
   seed: TERRAIN_SEED,
+  mountainSeed: TERRAIN_SEED,
   baseLayer: { ...DEFAULT_BASE_LAYER },
   island: { ...DEFAULT_ISLAND_SETTINGS },
   layers: [createDefaultTerrainLayer(0)],
@@ -108,12 +109,9 @@ function sampleBaseLayerHeight(noise2D, x, z, baseLayer) {
  * Internal: samples offset UV per layer; does not remap to [0, 1] so amplitude is true noise scale.
  */
 function sampleMountainLayerHeight(noise2D, x, z, layer) {
-  const noise = sampleTerrainHeight(
-    noise2D,
-    x + layer.offsetX,
-    z + layer.offsetZ,
-    layer
-  );
+  const sampleX = x + layer.offsetX;
+  const sampleZ = z + layer.offsetZ;
+  const noise = sampleTerrainHeight(noise2D, sampleX, sampleZ, layer);
   return noise * layer.amplitude;
 }
 
@@ -199,7 +197,7 @@ function rebuildTerrainHeights(geometry, settings, scratch) {
   const baseNoise2D = createNoise2D(seededRandom);
   const edgeNoise2D = createNoise2D(createSeededRandom(settings.seed + EDGE_NOISE_SEED_OFFSET));
   scratch.layerNoise2D = settings.layers.map((layer) =>
-    createNoise2D(createSeededRandom(settings.seed + layer.seedOffset))
+    createNoise2D(createSeededRandom(settings.mountainSeed + layer.seedOffset))
   );
   const positions = geometry.attributes.position;
   scratch.minHeight = Number.POSITIVE_INFINITY;
@@ -367,6 +365,7 @@ export function createTerrainRenderer(overrides = {}) {
     Object.assign(settings, normalizeTerrainSettings({ ...settings, ...nextSettings }));
     const geometryDirty =
       settings.seed !== previousSettings.seed ||
+      settings.mountainSeed !== previousSettings.mountainSeed ||
       JSON.stringify(settings.baseLayer) !== JSON.stringify(previousSettings.baseLayer) ||
       JSON.stringify(settings.island) !== JSON.stringify(previousSettings.island) ||
       JSON.stringify(settings.layers) !== JSON.stringify(previousSettings.layers);
