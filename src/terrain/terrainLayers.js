@@ -1,3 +1,5 @@
+import { normalizeTerrainPaint } from './terrainPaint.js';
+
 /** Default surface texture on the island plateau (does not scale island bulk). */
 export const DEFAULT_BASE_LAYER = {
   amplitude: 0.28,
@@ -94,6 +96,7 @@ export function normalizeTerrainSettings(settings = {}) {
       : typeof normalized.seed === 'number'
         ? Math.max(0, Math.min(MOUNTAIN_SEED_MAX, Math.round(normalized.seed)))
         : DEFAULT_MOUNTAIN_SEED;
+  normalized.paint = normalizeTerrainPaint(normalized);
 
   const legacyNoise =
     typeof settings.amplitude === 'number' ||

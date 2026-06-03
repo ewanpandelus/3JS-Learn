@@ -7,6 +7,17 @@ import {
   DEFAULT_ISLAND_SETTINGS,
   normalizeTerrainSettings
 } from './terrainLayers.js';
+import {
+  BIOME_NOISE_SEED_OFFSET,
+  DEFAULT_TERRAIN_PAINT,
+  PAINT_BLEND_HASH_DOT,
+  PAINT_BLEND_HASH_XY,
+  PAINT_BLEND_NOISE_OCTAVE_TWO_SCALE,
+  PAINT_BLEND_NOISE_OCTAVE_TWO_WEIGHT,
+  PAINT_BLEND_NOISE_SEED_OFFSET,
+  SLOPE_BLEND_FLAT_END,
+  SLOPE_BLEND_STEEP_END
+} from './terrainPaint.js';
 /** Normalized radius of full-strength dry land before the shore rise band. */
 const ISLAND_CORE_RADIUS = 0.44;
 /** Normalized mesh radius where submerged shelf begins (narrow band = steeper shore). */
@@ -32,8 +43,9 @@ const EDGE_NOISE_PERSISTENCE = 0.5;
 const TERRAIN_SEA_LEVEL = -0.18;
 const TERRAIN_PERSISTENCE = 0.5;
 const TERRAIN_SEED = 1337;
-const TERRAIN_ROUGHNESS = 0.92;
-const TERRAIN_METALNESS = 0.04;
+/** Fully matte so snow albedo is not read as view-dependent specular. */
+const TERRAIN_ROUGHNESS = 1;
+const TERRAIN_METALNESS = 0;
 
 const DEFAULT_TERRAIN_SETTINGS = {
   width: TERRAIN_WIDTH,
@@ -45,8 +57,7 @@ const DEFAULT_TERRAIN_SETTINGS = {
   baseLayer: { ...DEFAULT_BASE_LAYER },
   island: { ...DEFAULT_ISLAND_SETTINGS },
   layers: [createDefaultTerrainLayer(0)],
-  colorLow: '#304a33',
-  colorHigh: '#b6c391'
+  paint: { ...DEFAULT_TERRAIN_PAINT }
 };
 
 /**
@@ -196,9 +207,11 @@ function rebuildTerrainHeights(geometry, settings, scratch) {
   const seededRandom = createSeededRandom(settings.seed);
   const baseNoise2D = createNoise2D(seededRandom);
   const edgeNoise2D = createNoise2D(createSeededRandom(settings.seed + EDGE_NOISE_SEED_OFFSET));
+  const biomeNoise2D = createNoise2D(createSeededRandom(settings.seed + BIOME_NOISE_SEED_OFFSET));
   scratch.layerNoise2D = settings.layers.map((layer) =>
     createNoise2D(createSeededRandom(settings.mountainSeed + layer.seedOffset))
   );
+  const biomeNoiseFrequency = settings.paint.biomeNoiseFrequency;
   const positions = geometry.attributes.position;
   scratch.minHeight = Number.POSITIVE_INFINITY;
   scratch.maxHeight = Number.NEGATIVE_INFINITY;
@@ -234,6 +247,9 @@ function rebuildTerrainHeights(geometry, settings, scratch) {
 
     y -= envelope * ISLAND_SHELF_SUBMERGE_DEPTH;
     scratch.heights[i] = y;
+
+    const biomeSample = biomeNoise2D(x * biomeNoiseFrequency, z * biomeNoiseFrequency);
+    scratch.biomeNorm[i] = biomeSample * 0.5 + 0.5;
   }
 
   for (let i = 0; i < positions.count; i += 1) {
@@ -245,12 +261,12 @@ function rebuildTerrainHeights(geometry, settings, scratch) {
 
   const invHeightRange =
     scratch.maxHeight === scratch.minHeight ? 0 : 1 / (scratch.maxHeight - scratch.minHeight);
-  const normalizedHeights = scratch.normalizedHeights;
   for (let i = 0; i < positions.count; i += 1) {
-    normalizedHeights[i] =
+    scratch.heightNorm[i] =
       invHeightRange === 0 ? 0.5 : (scratch.heights[i] - scratch.minHeight) * invHeightRange;
   }
 
+  geometry.attributes.aBiomeNorm.needsUpdate = true;
   geometry.attributes.aHeightNorm.needsUpdate = true;
   positions.needsUpdate = true;
   geometry.computeVertexNormals();
@@ -258,19 +274,68 @@ function rebuildTerrainHeights(geometry, settings, scratch) {
 }
 
 /**
- * Applies terrain shader color uniforms from current terrain settings.
+ * Builds a stable 2D seed for paint blend dither noise from the terrain seed.
+ * Inputs: `seed` integer terrain generation seed.
+ * Outputs: `THREE.Vector2` UV offset for shader value noise, no side effects.
+ * Internal: mixes seed with `PAINT_BLEND_NOISE_SEED_OFFSET` into two decorrelated scalars.
+ */
+function createPaintBlendNoiseSeed(seed) {
+  const mixed = (seed + PAINT_BLEND_NOISE_SEED_OFFSET) >>> 0;
+  return new THREE.Vector2((mixed % 10000) * 0.0017, ((mixed + 97) % 10000) * 0.0023);
+}
+
+/**
+ * Builds initial terrain paint uniforms for `onBeforeCompile`.
+ * Inputs: `paint` normalized paint settings object, `seed` terrain generation seed.
+ * Outputs: uniform map for the terrain fragment shader.
+ * Internal: biomes from noise; `RockTexBlend` slope tints gated by normalized height.
+ */
+function createTerrainPaintUniforms(paint, seed) {
+  return {
+    uBiomeAColor: { value: new THREE.Color(paint.biomeAColor) },
+    uBiomeBColor: { value: new THREE.Color(paint.biomeBColor) },
+    uMellowSlopeColor: { value: new THREE.Color(paint.mellowSlopeColor) },
+    uSteepSlopeColor: { value: new THREE.Color(paint.steepSlopeColor) },
+    uSnowColor: { value: new THREE.Color(paint.snowColor) },
+    uSlopeFlatEnd: { value: SLOPE_BLEND_FLAT_END },
+    uSlopeSteepEnd: { value: SLOPE_BLEND_STEEP_END },
+    uSlopeHeightStart: { value: paint.slopeHeightStart },
+    uSlopeHeightBlend: { value: paint.slopeHeightBlend },
+    uSnowHeightStart: { value: paint.snowHeightStart },
+    uSnowHeightBlend: { value: paint.snowHeightBlend },
+    uPaintBlendNoiseSeed: { value: createPaintBlendNoiseSeed(seed) },
+    uPaintBlendNoiseFrequency: { value: paint.blendNoiseFrequency },
+    uPaintBlendNoiseStrength: { value: paint.blendNoiseStrength },
+    uPaintBlendNoiseOctave2Weight: { value: PAINT_BLEND_NOISE_OCTAVE_TWO_WEIGHT },
+    uPaintBlendNoiseOctave2Scale: { value: PAINT_BLEND_NOISE_OCTAVE_TWO_SCALE }
+  };
+}
+
+/**
+ * Applies terrain shader paint uniforms from current terrain settings.
  * Inputs: `material` terrain material and current settings object.
- * Outputs: updates color uniforms in the material shader hook.
+ * Outputs: updates paint uniforms on the compiled shader.
  * Internal: writes values into `onBeforeCompile`-injected uniforms when shader is available.
  */
-function applyShaderColors(material, settings) {
+function applyTerrainPaint(material, settings) {
   const shader = material.userData.shader;
   if (!shader) {
     return;
   }
 
-  shader.uniforms.uColorLow.value.set(settings.colorLow);
-  shader.uniforms.uColorHigh.value.set(settings.colorHigh);
+  const paint = settings.paint;
+  shader.uniforms.uBiomeAColor.value.set(paint.biomeAColor);
+  shader.uniforms.uBiomeBColor.value.set(paint.biomeBColor);
+  shader.uniforms.uMellowSlopeColor.value.set(paint.mellowSlopeColor);
+  shader.uniforms.uSteepSlopeColor.value.set(paint.steepSlopeColor);
+  shader.uniforms.uSnowColor.value.set(paint.snowColor);
+  shader.uniforms.uSlopeHeightStart.value = paint.slopeHeightStart;
+  shader.uniforms.uSlopeHeightBlend.value = paint.slopeHeightBlend;
+  shader.uniforms.uSnowHeightStart.value = paint.snowHeightStart;
+  shader.uniforms.uSnowHeightBlend.value = paint.snowHeightBlend;
+  shader.uniforms.uPaintBlendNoiseSeed.value.copy(createPaintBlendNoiseSeed(settings.seed));
+  shader.uniforms.uPaintBlendNoiseFrequency.value = paint.blendNoiseFrequency;
+  shader.uniforms.uPaintBlendNoiseStrength.value = paint.blendNoiseStrength;
 }
 
 /**
@@ -295,24 +360,31 @@ export function createTerrainRenderer(overrides = {}) {
     metalness: TERRAIN_METALNESS
   });
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.uColorLow = { value: new THREE.Color(settings.colorLow) };
-    shader.uniforms.uColorHigh = { value: new THREE.Color(settings.colorHigh) };
+    Object.assign(shader.uniforms, createTerrainPaintUniforms(settings.paint, settings.seed));
     material.userData.shader = shader;
+    const [paintHashX, paintHashY] = PAINT_BLEND_HASH_XY;
 
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
         `
         #include <common>
+        attribute float aBiomeNorm;
         attribute float aHeightNorm;
+        varying float vBiomeNorm;
         varying float vHeightNorm;
+        varying vec3 vWorldNormal;
+        varying vec3 vWorldPosition;
         `
       )
       .replace(
         '#include <begin_vertex>',
         `
         #include <begin_vertex>
+        vBiomeNorm = aBiomeNorm;
         vHeightNorm = aHeightNorm;
+        vWorldNormal = mat3(modelMatrix) * normal;
+        vWorldPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;
         `
       );
 
@@ -321,15 +393,102 @@ export function createTerrainRenderer(overrides = {}) {
         '#include <common>',
         `
         #include <common>
-        uniform vec3 uColorLow;
-        uniform vec3 uColorHigh;
+        uniform vec3 uBiomeAColor;
+        uniform vec3 uBiomeBColor;
+        uniform vec3 uMellowSlopeColor;
+        uniform vec3 uSteepSlopeColor;
+        uniform vec3 uSnowColor;
+        uniform float uSlopeFlatEnd;
+        uniform float uSlopeSteepEnd;
+        uniform float uSlopeHeightStart;
+        uniform float uSlopeHeightBlend;
+        uniform float uSnowHeightStart;
+        uniform float uSnowHeightBlend;
+        uniform vec2 uPaintBlendNoiseSeed;
+        uniform float uPaintBlendNoiseFrequency;
+        uniform float uPaintBlendNoiseStrength;
+        uniform float uPaintBlendNoiseOctave2Weight;
+        uniform float uPaintBlendNoiseOctave2Scale;
+        varying float vBiomeNorm;
         varying float vHeightNorm;
+        varying vec3 vWorldNormal;
+        varying vec3 vWorldPosition;
+
+        const vec2 PAINT_HASH_XY = vec2(${paintHashX}, ${paintHashY});
+        const float PAINT_HASH_DOT = ${PAINT_BLEND_HASH_DOT};
+
+        float paintHash21(vec2 p) {
+          vec2 q = fract(p * PAINT_HASH_XY);
+          q += dot(q, q + PAINT_HASH_DOT);
+          return fract(q.x * q.y);
+        }
+
+        float paintValueNoise(vec2 p) {
+          vec2 cell = floor(p);
+          vec2 f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          float n00 = paintHash21(cell);
+          float n10 = paintHash21(cell + vec2(1.0, 0.0));
+          float n01 = paintHash21(cell + vec2(0.0, 1.0));
+          float n11 = paintHash21(cell + vec2(1.0, 1.0));
+          return mix(mix(n00, n10, f.x), mix(n01, n11, f.x), f.y);
+        }
+
+        float paintBlendNoise(vec2 worldXZ, float octaveScale) {
+          vec2 sampleUv = worldXZ * uPaintBlendNoiseFrequency * octaveScale + uPaintBlendNoiseSeed;
+          return paintValueNoise(sampleUv);
+        }
+
+        float paintBlendNoiseSigned(vec2 worldXZ) {
+          float n0 = paintBlendNoise(worldXZ, 1.0);
+          float n1 = paintBlendNoise(worldXZ, uPaintBlendNoiseOctave2Scale);
+          float blended = mix(n0, n1, uPaintBlendNoiseOctave2Weight);
+          return (blended - 0.5) * 2.0 * uPaintBlendNoiseStrength;
+        }
+
+        vec3 lowlandColour(vec3 biomeA, vec3 biomeB, float biomeNorm) {
+          return mix(biomeA, biomeB, clamp(biomeNorm, 0.0, 1.0));
+        }
+
+        vec3 rockTexBlend(float slope, vec3 flatColour, vec3 mellowColour, vec3 steepColour) {
+          if (slope < uSlopeFlatEnd) {
+            return mix(flatColour, mellowColour, slope / max(uSlopeFlatEnd, 0.0001));
+          }
+          if (slope < uSlopeSteepEnd) {
+            float rockT = (slope - uSlopeFlatEnd) / max(uSlopeSteepEnd - uSlopeFlatEnd, 0.0001);
+            return mix(mellowColour, steepColour, clamp(rockT, 0.0, 1.0));
+          }
+          return steepColour;
+        }
+
+        float slopeFromWorldPosition(vec3 worldPos, vec3 vertexWorldNormal) {
+          vec3 dpdx = dFdx(worldPos);
+          vec3 dpdy = dFdy(worldPos);
+          vec3 geomNormal = normalize(cross(dpdx, dpdy));
+          if (dot(geomNormal, vertexWorldNormal) < 0.0) {
+            geomNormal = -geomNormal;
+          }
+          return clamp(1.0 - geomNormal.y, 0.0, 1.0);
+        }
         `
       )
       .replace(
         'vec4 diffuseColor = vec4( diffuse, opacity );',
         `
-        vec3 terrainColor = mix(uColorLow, uColorHigh, clamp(vHeightNorm, 0.0, 1.0));
+        vec2 worldXZ = vWorldPosition.xz;
+        float blendJitter = paintBlendNoiseSigned(worldXZ);
+        vec3 lowland = lowlandColour(uBiomeAColor, uBiomeBColor, vBiomeNorm + blendJitter);
+        vec3 vertexWorldNormal = normalize(vWorldNormal);
+        float slope = clamp(slopeFromWorldPosition(vWorldPosition, vertexWorldNormal) + blendJitter, 0.0, 1.0);
+        vec3 grassSlope = rockTexBlend(slope, lowland, uMellowSlopeColor, uSteepSlopeColor);
+        vec3 snowSlope = rockTexBlend(slope, uSnowColor, uMellowSlopeColor, uSteepSlopeColor);
+        float slopeHeightEnd = uSlopeHeightStart + uSlopeHeightBlend;
+        float snowHeightEnd = uSnowHeightStart + uSnowHeightBlend;
+        float heightNorm = clamp(vHeightNorm + blendJitter, 0.0, 1.0);
+        float slopeGate = smoothstep(uSlopeHeightStart, slopeHeightEnd, heightNorm);
+        float snowGate = smoothstep(uSnowHeightStart, snowHeightEnd, heightNorm);
+        vec3 highland = mix(grassSlope, snowSlope, snowGate);
+        vec3 terrainColor = mix(lowland, highland, slopeGate);
         vec4 diffuseColor = vec4(terrainColor, opacity);
         `
       );
@@ -340,7 +499,8 @@ export function createTerrainRenderer(overrides = {}) {
   mesh.castShadow = true;
   const scratch = {
     heights: new Float32Array(geometry.attributes.position.count),
-    normalizedHeights: new Float32Array(geometry.attributes.position.count),
+    biomeNorm: new Float32Array(geometry.attributes.position.count),
+    heightNorm: new Float32Array(geometry.attributes.position.count),
     baseX: new Float32Array(geometry.attributes.position.count),
     baseZ: new Float32Array(geometry.attributes.position.count),
     minHeight: 0,
@@ -350,9 +510,10 @@ export function createTerrainRenderer(overrides = {}) {
     scratch.baseX[i] = geometry.attributes.position.getX(i);
     scratch.baseZ[i] = geometry.attributes.position.getZ(i);
   }
-  geometry.setAttribute('aHeightNorm', new THREE.BufferAttribute(scratch.normalizedHeights, 1));
+  geometry.setAttribute('aBiomeNorm', new THREE.BufferAttribute(scratch.biomeNorm, 1));
+  geometry.setAttribute('aHeightNorm', new THREE.BufferAttribute(scratch.heightNorm, 1));
   rebuildTerrainHeights(geometry, settings, scratch);
-  applyShaderColors(material, settings);
+  applyTerrainPaint(material, settings);
 
   /**
    * Updates terrain settings and re-generates mesh data/material state.
@@ -368,20 +529,19 @@ export function createTerrainRenderer(overrides = {}) {
       settings.mountainSeed !== previousSettings.mountainSeed ||
       JSON.stringify(settings.baseLayer) !== JSON.stringify(previousSettings.baseLayer) ||
       JSON.stringify(settings.island) !== JSON.stringify(previousSettings.island) ||
-      JSON.stringify(settings.layers) !== JSON.stringify(previousSettings.layers);
+      JSON.stringify(settings.layers) !== JSON.stringify(previousSettings.layers) ||
+      settings.paint.biomeNoiseFrequency !== previousSettings.paint.biomeNoiseFrequency;
 
-    const colorDirty =
-      settings.colorLow !== previousSettings.colorLow ||
-      settings.colorHigh !== previousSettings.colorHigh;
+    const paintDirty = JSON.stringify(settings.paint) !== JSON.stringify(previousSettings.paint);
 
     if (geometryDirty) {
       rebuildTerrainHeights(geometry, settings, scratch);
-      applyShaderColors(material, settings);
+      applyTerrainPaint(material, settings);
       return;
     }
 
-    if (colorDirty) {
-      applyShaderColors(material, settings);
+    if (paintDirty) {
+      applyTerrainPaint(material, settings);
     }
 
   }

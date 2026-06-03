@@ -6,6 +6,7 @@ import {
   mergeLayerWithDefaults,
   MOUNTAIN_SEED_MAX
 } from '../terrain/terrainLayers.js';
+import { DEFAULT_TERRAIN_PAINT } from '../terrain/terrainPaint.js';
 import { applyPanelChrome, buildControl, ensurePanelStyles } from './panelTheme.js';
 
 const TAB_IDS = ['island', 'layers', 'paint', 'water'];
@@ -33,8 +34,12 @@ export function createSceneEditorPanel({
     : [];
   let baseLayer = { ...DEFAULT_BASE_LAYER, ...terrainSettings.baseLayer };
   let island = { ...DEFAULT_ISLAND_SETTINGS, ...terrainSettings.island };
-  let colorLow = terrainSettings.colorLow;
-  let colorHigh = terrainSettings.colorHigh;
+  let paint = {
+    ...DEFAULT_TERRAIN_PAINT,
+    ...(terrainSettings.paint ?? {}),
+    biomeAColor: terrainSettings.paint?.biomeAColor ?? terrainSettings.colorLow ?? DEFAULT_TERRAIN_PAINT.biomeAColor,
+    biomeBColor: terrainSettings.paint?.biomeBColor ?? terrainSettings.colorHigh ?? DEFAULT_TERRAIN_PAINT.biomeBColor
+  };
   let water = { ...waterSettings };
   let mountainSeed =
     typeof terrainSettings.mountainSeed === 'number'
@@ -246,9 +251,23 @@ export function createSceneEditorPanel({
 
     if (activeTab === 'paint') {
       body.innerHTML = `
-        <p class="editor-section-title">Terrain colours</p>
-        ${buildControl('Low colour', 'colorLow', 'color', { value: colorLow })}
-        ${buildControl('High colour', 'colorHigh', 'color', { value: colorHigh })}
+        <p class="editor-panel__hint" style="margin:0 0 12px;">Biomes everywhere; slope rock blend only above a height (see light_ps.hlsl).</p>
+        <section data-paint-panel>
+          <p class="editor-section-title">Lowland biomes (noise)</p>
+          ${buildControl('Biome A', 'biomeAColor', 'color', { value: paint.biomeAColor })}
+          ${buildControl('Biome B', 'biomeBColor', 'color', { value: paint.biomeBColor })}
+          ${buildControl('Biome noise scale', 'biomeNoiseFrequency', 'range', { min: 0, max: 2, step: 0.01, value: paint.biomeNoiseFrequency })}
+          ${buildControl('Blend noise scale', 'blendNoiseFrequency', 'range', { min: 0, max: 3, step: 0.01, value: paint.blendNoiseFrequency ?? DEFAULT_TERRAIN_PAINT.blendNoiseFrequency })}
+          ${buildControl('Blend noise strength', 'blendNoiseStrength', 'range', { min: 0, max: 0.25, step: 0.005, value: paint.blendNoiseStrength ?? DEFAULT_TERRAIN_PAINT.blendNoiseStrength })}
+          <p class="editor-section-title" style="margin-top:14px;">Slope blend (above height)</p>
+          ${buildControl('Mellow slope', 'mellowSlopeColor', 'color', { value: paint.mellowSlopeColor })}
+          ${buildControl('Steep rock', 'steepSlopeColor', 'color', { value: paint.steepSlopeColor })}
+          ${buildControl('Snow', 'snowColor', 'color', { value: paint.snowColor })}
+          ${buildControl('Slope height start', 'slopeHeightStart', 'range', { min: 0, max: 1, step: 0.01, value: paint.slopeHeightStart })}
+          ${buildControl('Slope height blend', 'slopeHeightBlend', 'range', { min: 0, max: 0.5, step: 0.01, value: paint.slopeHeightBlend })}
+          ${buildControl('Snow height start', 'snowHeightStart', 'range', { min: 0, max: 1, step: 0.01, value: paint.snowHeightStart })}
+          ${buildControl('Snow height blend', 'snowHeightBlend', 'range', { min: 0, max: 0.5, step: 0.01, value: paint.snowHeightBlend })}
+        </section>
       `;
       return;
     }
@@ -314,6 +333,19 @@ export function createSceneEditorPanel({
   }
 
   /**
+   * Updates one numeric paint field on the local paint settings object.
+   * Inputs: `field` property name, `value` number.
+   * Outputs: mutates module-level `paint`.
+   * Internal: only assigns when `field` exists on the paint schema.
+   */
+  function applyPaintField(field, value) {
+    if (!(field in DEFAULT_TERRAIN_PAINT)) {
+      return;
+    }
+    paint[field] = value;
+  }
+
+  /**
    * Parses base or layer slider input into a terrain settings patch.
    * Inputs: `target` HTMLInputElement from the panel.
    * Outputs: queues terrain patch fields.
@@ -363,6 +395,9 @@ export function createSceneEditorPanel({
         baseLayer: { ...baseLayer },
         island: { ...island }
       });
+    } else if (target.closest('[data-paint-panel]')) {
+      applyPaintField(target.name, nextValue);
+      Object.assign(pendingTerrainPatch, { paint: { ...paint } });
     } else if (layerPanel) {
       syncLayersFromDom();
       Object.assign(pendingTerrainPatch, { layers: layers.map((layer) => ({ ...layer })) });
@@ -415,8 +450,9 @@ export function createSceneEditorPanel({
       return;
     }
 
-    if (event.target.name === 'colorLow' || event.target.name === 'colorHigh') {
-      onTerrainChange({ [event.target.name]: event.target.value });
+    if (event.target.closest('[data-paint-panel]') && event.target.type === 'color') {
+      applyPaintField(event.target.name, event.target.value);
+      onTerrainChange({ paint: { ...paint } });
       return;
     }
 
@@ -522,17 +558,20 @@ export function createSceneEditorPanel({
         ...layer
       }));
     }
+    if (nextSettings?.paint) {
+      paint = { ...paint, ...nextSettings.paint };
+    }
     if (typeof nextSettings?.colorLow === 'string') {
-      colorLow = nextSettings.colorLow;
+      paint.biomeAColor = nextSettings.colorLow;
     }
     if (typeof nextSettings?.colorHigh === 'string') {
-      colorHigh = nextSettings.colorHigh;
+      paint.biomeBColor = nextSettings.colorHigh;
     }
 
     renderActiveTab();
 
     for (const [key, value] of Object.entries(nextSettings ?? {})) {
-      if (key === 'baseLayer' || key === 'island' || key === 'layers' || key === 'mountainSeed') {
+      if (key === 'baseLayer' || key === 'island' || key === 'layers' || key === 'mountainSeed' || key === 'paint') {
         continue;
       }
       const input = panel.querySelector(`input[name="${key}"]`);
