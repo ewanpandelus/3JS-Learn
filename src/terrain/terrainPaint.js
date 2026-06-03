@@ -3,9 +3,9 @@ export const BIOME_NOISE_SEED_OFFSET = 5191;
 /** Seed offset for paint blend dither noise (separate from biome noise). */
 export const PAINT_BLEND_NOISE_SEED_OFFSET = 7843;
 /** Default world-space frequency for paint blend dither noise. */
-export const PAINT_BLEND_NOISE_FREQUENCY_DEFAULT = 0.4;
+export const PAINT_BLEND_NOISE_FREQUENCY_DEFAULT = 1.68;
 /** Default strength for shifting normalized paint blend thresholds. */
-export const PAINT_BLEND_NOISE_STRENGTH_DEFAULT = 0.07;
+export const PAINT_BLEND_NOISE_STRENGTH_DEFAULT = 0.15;
 /** Second octave weight when sampling paint blend noise. */
 export const PAINT_BLEND_NOISE_OCTAVE_TWO_WEIGHT = 0.5;
 /** Second octave frequency scale for paint blend noise. */
@@ -26,18 +26,18 @@ export const SLOPE_BLEND_STEEP_END = 0.7;
  * Internal: mirrors TerrainGenerationDirectX11 `RockTexBlend` + height bands from light_ps.hlsl.
  */
 export const DEFAULT_TERRAIN_PAINT = {
-  biomeAColor: '#2d5a2a',
-  biomeBColor: '#8b6914',
-  mellowSlopeColor: '#6b5d4a',
-  steepSlopeColor: '#4a4a52',
-  snowColor: '#f5f8ff',
-  biomeNoiseFrequency: 0.18,
+  biomeAColor: '#dcc69f',
+  biomeBColor: '#ad7f81',
+  mellowSlopeColor: '#6e6458',
+  steepSlopeColor: '#080731',
+  snowColor: '#eeeeee',
+  biomeNoiseFrequency: 0.09,
   blendNoiseFrequency: PAINT_BLEND_NOISE_FREQUENCY_DEFAULT,
   blendNoiseStrength: PAINT_BLEND_NOISE_STRENGTH_DEFAULT,
-  slopeHeightStart: 0.28,
-  slopeHeightBlend: 0.22,
-  snowHeightStart: 0.58,
-  snowHeightBlend: 0.28
+  slopeHeightStart: 0.35,
+  slopeHeightBlend: 0.12,
+  snowHeightStart: 0.78,
+  snowHeightBlend: 0.16
 };
 
 /**

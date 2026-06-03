@@ -2,8 +2,8 @@ import { normalizeTerrainPaint } from './terrainPaint.js';
 
 /** Default surface texture on the island plateau (does not scale island bulk). */
 export const DEFAULT_BASE_LAYER = {
-  amplitude: 0.28,
-  frequency: 0.24,
+  amplitude: 0,
+  frequency: 0.53,
   octaves: 4,
   lacunarity: 2,
   persistence: 0.5
@@ -11,12 +11,28 @@ export const DEFAULT_BASE_LAYER = {
 
 /** Coastline and island-wide shape tuning (not mountain stack layers). */
 export const DEFAULT_ISLAND_SETTINGS = {
-  edgeNoiseAmplitude: 0.08,
+  edgeNoiseAmplitude: 0.29,
   edgeNoiseFrequency: 0.42
 };
 
 /** Default seed for mountain layer noise (independent of island base seed). */
-export const DEFAULT_MOUNTAIN_SEED = 1337;
+export const DEFAULT_MOUNTAIN_SEED = 852916;
+
+/** Primary mountain stack layer defaults (large-scale relief). */
+export const DEFAULT_MOUNTAIN_LAYER_0 = {
+  amplitude: 2.57,
+  frequency: 0.08,
+  octaves: 1,
+  lacunarity: 0.13
+};
+
+/** Secondary mountain stack layer defaults (fine detail). */
+export const DEFAULT_MOUNTAIN_LAYER_1 = {
+  amplitude: 0.77,
+  frequency: 0.53,
+  octaves: 7,
+  lacunarity: 1.48
+};
 /** Maximum mountain seed value accepted by the editor. */
 export const MOUNTAIN_SEED_MAX = 999999;
 /** Prime stride between per-layer simplex seeds. */
@@ -68,16 +84,35 @@ export function mergeLayerWithDefaults(layer, index) {
  * Internal: offsets seed and world UV per index so stacked layers do not align.
  */
 export function createDefaultTerrainLayer(index = 0, overrides = {}) {
+  const layerPreset =
+    index === 0
+      ? DEFAULT_MOUNTAIN_LAYER_0
+      : index === 1
+        ? DEFAULT_MOUNTAIN_LAYER_1
+        : {
+            amplitude: 0.6,
+            frequency: 0.58,
+            octaves: 5,
+            lacunarity: 2.2
+          };
+
   return {
-    amplitude: 0.6,
-    frequency: 0.58,
-    octaves: 5,
-    lacunarity: 2.2,
     persistence: 0.48,
     ...getLayerSampleSpace(index),
     enabled: true,
+    ...layerPreset,
     ...overrides
   };
+}
+
+/**
+ * Builds the default two-layer mountain stack used on first load.
+ * Inputs: none.
+ * Outputs: array of two normalized layer settings objects.
+ * Internal: applies `DEFAULT_MOUNTAIN_LAYER_*` presets with per-index sample pan/seed.
+ */
+export function createDefaultTerrainLayers() {
+  return [createDefaultTerrainLayer(0), createDefaultTerrainLayer(1)];
 }
 
 /**

@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import { createNoise2D } from 'https://cdn.jsdelivr.net/npm/simplex-noise@4.0.1/dist/esm/simplex-noise.js';
 import { TERRAIN_DEPTH, TERRAIN_SEGMENTS, TERRAIN_WIDTH } from '../config/worldExtents.js';
 import {
-  createDefaultTerrainLayer,
+  createDefaultTerrainLayers,
   DEFAULT_BASE_LAYER,
   DEFAULT_ISLAND_SETTINGS,
+  DEFAULT_MOUNTAIN_SEED,
   normalizeTerrainSettings
 } from './terrainLayers.js';
 import {
@@ -53,10 +54,10 @@ const DEFAULT_TERRAIN_SETTINGS = {
   segments: TERRAIN_SEGMENTS,
   seaLevel: TERRAIN_SEA_LEVEL,
   seed: TERRAIN_SEED,
-  mountainSeed: TERRAIN_SEED,
+  mountainSeed: DEFAULT_MOUNTAIN_SEED,
   baseLayer: { ...DEFAULT_BASE_LAYER },
   island: { ...DEFAULT_ISLAND_SETTINGS },
-  layers: [createDefaultTerrainLayer(0)],
+  layers: createDefaultTerrainLayers(),
   paint: { ...DEFAULT_TERRAIN_PAINT }
 };
 
