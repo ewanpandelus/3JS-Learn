@@ -1,9 +1,25 @@
 import * as THREE from 'three';
 import { createNoise2D } from 'https://cdn.jsdelivr.net/npm/simplex-noise@4.0.1/dist/esm/simplex-noise.js';
-
-const TERRAIN_WIDTH = 16;
-const TERRAIN_DEPTH = 16;
-const TERRAIN_SEGMENTS = 240;
+import { TERRAIN_DEPTH, TERRAIN_SEGMENTS, TERRAIN_WIDTH } from '../config/worldExtents.js';
+import {
+  createDefaultTerrainLayer,
+  DEFAULT_BASE_LAYER,
+  normalizeTerrainSettings
+} from './terrainLayers.js';
+/** Normalized radius of full-strength dry land before the shore rise band. */
+const ISLAND_CORE_RADIUS = 0.44;
+/** Normalized mesh radius where submerged shelf begins (narrow band = steeper shore). */
+const ISLAND_WATER_ENVELOPE_START = 0.56;
+/** Normalized mesh radius where the shelf is fully below sea level. */
+const ISLAND_WATER_ENVELOPE_END = 0.7;
+/** Exponent applied to land mask; values above 1 steepen the pop-up from water to dry land. */
+const ISLAND_LAND_RISE_SHARPNESS = 2.4;
+/** Minimum dry land height above the water plane at the island peak (world-local y). */
+const ISLAND_LAND_BASE_HEIGHT = 0.42;
+/** Shelf depth below the water plane on submerged perimeter vertices (world-local y). */
+const ISLAND_SHELF_SUBMERGE_DEPTH = 0.55;
+/** Lowest hills on dry land as a fraction of amplitude (avoids flat zero-clamped valleys). */
+const ISLAND_NOISE_HEIGHT_FLOOR = 0.22;
 const TERRAIN_SEA_LEVEL = -0.18;
 const TERRAIN_PERSISTENCE = 0.5;
 const TERRAIN_SEED = 1337;
@@ -15,12 +31,9 @@ const DEFAULT_TERRAIN_SETTINGS = {
   depth: TERRAIN_DEPTH,
   segments: TERRAIN_SEGMENTS,
   seaLevel: TERRAIN_SEA_LEVEL,
-  amplitude: 1.1,
-  frequency: 0.24,
-  octaves: 5,
-  lacunarity: 2,
-  persistence: TERRAIN_PERSISTENCE,
   seed: TERRAIN_SEED,
+  baseLayer: { ...DEFAULT_BASE_LAYER },
+  layers: [createDefaultTerrainLayer(0)],
   colorLow: '#304a33',
   colorHigh: '#b6c391'
 };
@@ -66,28 +79,115 @@ function sampleTerrainHeight(noise2D, x, z, { frequency, octaves, lacunarity, pe
 }
 
 /**
+ * Island plateau texture height from fBm noise (base layer only).
+ * Inputs: `noise2D` simplex function, `x` and `z` coordinates, and `baseLayer` noise params.
+ * Outputs: non-negative height offset for island surface texture.
+ * Internal: remaps noise to [floor, 1] × baseLayer.amplitude so amplitude scales detail not bulk.
+ */
+function sampleBaseLayerHeight(noise2D, x, z, baseLayer) {
+  const noise = sampleTerrainHeight(noise2D, x, z, baseLayer);
+  const normalized = noise * 0.5 + 0.5;
+  const relief = ISLAND_NOISE_HEIGHT_FLOOR + (1 - ISLAND_NOISE_HEIGHT_FLOOR) * normalized;
+  return relief * baseLayer.amplitude;
+}
+
+/**
+ * Mountain layer displacement from bipolar fBm noise.
+ * Inputs: `noise2D` simplex function, `x` and `z` coordinates, and one mountain `layer` config.
+ * Outputs: signed height offset where `layer.amplitude` scales peaks/valleys only.
+ * Internal: samples offset UV per layer; does not remap to [0, 1] so amplitude is true noise scale.
+ */
+function sampleMountainLayerHeight(noise2D, x, z, layer) {
+  const noise = sampleTerrainHeight(
+    noise2D,
+    x + layer.offsetX,
+    z + layer.offsetZ,
+    layer
+  );
+  return noise * layer.amplitude;
+}
+
+/**
+ * Water-envelope mask from normalized distance to terrain center.
+ * Inputs: `x` and `z` vertex coordinates, `halfWidth` and `halfDepth` mesh half-extents.
+ * Outputs: multiplier in [0, 1] (0 dry center, 1 submerged shelf at mesh edge).
+ * Internal: full submerge outside envelope end; smooth shelf blend only in the start–end band.
+ */
+function waterEnvelopeMask(x, z, halfWidth, halfDepth) {
+  const radialDistance = Math.hypot(x / halfWidth, z / halfDepth);
+  if (radialDistance >= ISLAND_WATER_ENVELOPE_END) {
+    return 1;
+  }
+  if (radialDistance <= ISLAND_WATER_ENVELOPE_START) {
+    return 0;
+  }
+  const fadeSpan = ISLAND_WATER_ENVELOPE_END - ISLAND_WATER_ENVELOPE_START;
+  const fadeT = (radialDistance - ISLAND_WATER_ENVELOPE_START) / fadeSpan;
+  const clampedT = Math.max(0, Math.min(1, fadeT));
+  return clampedT * clampedT * (3 - 2 * clampedT);
+}
+
+/**
+ * Dry-land mask from normalized distance to terrain center.
+ * Inputs: `x` and `z` vertex coordinates, `halfWidth` and `halfDepth` mesh half-extents.
+ * Outputs: multiplier in [0, 1] (1 on the core, steep falloff through the shore band).
+ * Internal: flat core plateau then sharp power curve on the complement of the water envelope.
+ */
+function islandLandMask(x, z, halfWidth, halfDepth) {
+  const radialDistance = Math.hypot(x / halfWidth, z / halfDepth);
+  if (radialDistance <= ISLAND_CORE_RADIUS) {
+    return 1;
+  }
+  const envelope = waterEnvelopeMask(x, z, halfWidth, halfDepth);
+  const landMask = 1 - envelope;
+  return landMask ** ISLAND_LAND_RISE_SHARPNESS;
+}
+
+/**
  * Rebuilds vertex heights for simple layered-noise terrain.
  * Inputs: `geometry`, `settings`, and mutable `scratch` object for cached arrays/range.
  * Outputs: updates vertex y positions and normalized height attribute; recomputes normals.
- * Internal: samples deterministic fBm noise per base vertex coordinate and scales by global amplitude.
+ * Internal: island envelope base, optional plateau texture, then stacked mountain layer displacements.
  */
 function rebuildTerrainHeights(geometry, settings, scratch) {
   const seededRandom = createSeededRandom(settings.seed);
-  const noise2D = createNoise2D(seededRandom);
+  const baseNoise2D = createNoise2D(seededRandom);
+  scratch.layerNoise2D = settings.layers.map((layer) =>
+    createNoise2D(createSeededRandom(settings.seed + layer.seedOffset))
+  );
   const positions = geometry.attributes.position;
   scratch.minHeight = Number.POSITIVE_INFINITY;
   scratch.maxHeight = Number.NEGATIVE_INFINITY;
 
-  const gridSize = settings.segments + 1;
+  const halfWidth = settings.width * 0.5;
+  const halfDepth = settings.depth * 0.5;
   const baseX = scratch.baseX;
   const baseZ = scratch.baseZ;
   for (let i = 0; i < positions.count; i += 1) {
     const x = baseX[i];
     const z = baseZ[i];
-    const y = sampleTerrainHeight(noise2D, x, z, settings) * settings.amplitude;
+    const envelope = waterEnvelopeMask(x, z, halfWidth, halfDepth);
+    const landMask = islandLandMask(x, z, halfWidth, halfDepth);
+    let y = landMask * ISLAND_LAND_BASE_HEIGHT;
+    y += landMask * sampleBaseLayerHeight(baseNoise2D, x, z, settings.baseLayer);
+
+    for (let layerIndex = 0; layerIndex < settings.layers.length; layerIndex += 1) {
+      const layer = settings.layers[layerIndex];
+      if (!layer.enabled) {
+        continue;
+      }
+      const mountainHeight = sampleMountainLayerHeight(
+        scratch.layerNoise2D[layerIndex],
+        x,
+        z,
+        layer
+      );
+      y += landMask * mountainHeight * landMask;
+    }
+
+    y -= envelope * ISLAND_SHELF_SUBMERGE_DEPTH;
     scratch.heights[i] = y;
   }
-  void gridSize;
 
   for (let i = 0; i < positions.count; i += 1) {
     const y = scratch.heights[i];
@@ -133,7 +233,7 @@ function applyShaderColors(material, settings) {
  * Internal: builds a rotated plane mesh, applies seeded noise displacement, and re-runs generation on setting updates.
  */
 export function createTerrainRenderer(overrides = {}) {
-  const settings = { ...DEFAULT_TERRAIN_SETTINGS, ...overrides };
+  const settings = normalizeTerrainSettings({ ...DEFAULT_TERRAIN_SETTINGS, ...overrides });
   const geometry = new THREE.PlaneGeometry(
     settings.width,
     settings.depth,
@@ -214,14 +314,12 @@ export function createTerrainRenderer(overrides = {}) {
    * Internal: merges settings, then selectively rebuilds geometry or only recolors when needed.
    */
   function update(nextSettings) {
-    const previousSettings = { ...settings };
-    Object.assign(settings, nextSettings);
+    const previousSettings = JSON.parse(JSON.stringify(settings));
+    Object.assign(settings, normalizeTerrainSettings({ ...settings, ...nextSettings }));
     const geometryDirty =
       settings.seed !== previousSettings.seed ||
-      settings.frequency !== previousSettings.frequency ||
-      settings.octaves !== previousSettings.octaves ||
-      settings.lacunarity !== previousSettings.lacunarity ||
-      settings.amplitude !== previousSettings.amplitude;
+      JSON.stringify(settings.baseLayer) !== JSON.stringify(previousSettings.baseLayer) ||
+      JSON.stringify(settings.layers) !== JSON.stringify(previousSettings.layers);
 
     const colorDirty =
       settings.colorLow !== previousSettings.colorLow ||

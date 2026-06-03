@@ -4,7 +4,12 @@ import { createClient } from '@supabase/supabase-js';
 import { createTerrainRenderer } from './src/terrain/createTerrainRenderer.js';
 import { createTerrainControls } from './src/ui/createTerrainControls.js';
 import { createLandscapeStoragePanel } from './src/ui/createLandscapeStoragePanel.js';
-import { createWaterSystem, DEFAULT_WATER_SETTINGS } from './src/water/createWaterSystem.js';
+import {
+  createWaterSystem,
+  DEFAULT_WATER_SETTINGS,
+  DEFAULT_WATER_SURFACE_WIDTH,
+  DEFAULT_WATER_SURFACE_DEPTH
+} from './src/water/createWaterSystem.js';
 import { createWaterControls } from './src/ui/createWaterControls.js';
 import { createAuthOverlay } from './src/auth/createAuthOverlay.js';
 import { getSupabaseConfig, isSupabaseConfigured } from './src/config/supabaseConfig.js';
@@ -20,14 +25,14 @@ const waterSystem = createWaterSystem({
   renderer,
   scene,
   camera,
-  width: terrainRenderer.settings.width,
-  depth: terrainRenderer.settings.depth,
+  width: DEFAULT_WATER_SURFACE_WIDTH,
+  depth: DEFAULT_WATER_SURFACE_DEPTH,
   seaLevel: terrainRenderer.settings.seaLevel,
   waterSettings: initialWaterSettings
 });
 scene.add(waterSystem.water);
 
-camera.position.set(4, 4.5, 7);
+camera.position.set(6, 7, 11);
 camera.lookAt(0, 0, 0);
 const controls = setupCameraControls(camera, renderer.domElement);
 
@@ -62,8 +67,8 @@ function setupCameraControls(camera, domElement) {
   orbitControls.enablePan = true;
   orbitControls.panSpeed = 0.9;
   orbitControls.zoomSpeed = 1.0;
-  orbitControls.minDistance = 2.5;
-  orbitControls.maxDistance = 25;
+  orbitControls.minDistance = 3;
+  orbitControls.maxDistance = 48;
   orbitControls.maxPolarAngle = Math.PI * 0.495;
   orbitControls.target.set(0, 0.15, 0);
   orbitControls.update();

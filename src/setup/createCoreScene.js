@@ -1,4 +1,9 @@
 import * as THREE from 'three';
+import { TERRAIN_EXTENT, WATER_SURFACE_WIDTH } from '../config/worldExtents.js';
+
+const FOG_NEAR = TERRAIN_EXTENT * 0.75;
+const FOG_FAR = WATER_SURFACE_WIDTH * 0.45;
+const SHADOW_HALF_EXTENT = TERRAIN_EXTENT * 0.85;
 
 /**
  * Creates the renderer, base scene, camera, and default lighting.
@@ -15,7 +20,7 @@ export function createCoreScene() {
   document.body.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0x8aa8c7, 12, 34);
+  scene.fog = new THREE.Fog(0x8aa8c7, FOG_NEAR, FOG_FAR);
 
   const camera = new THREE.PerspectiveCamera(
     75,
@@ -31,10 +36,10 @@ export function createCoreScene() {
   sunLight.position.set(7, 12, 5);
   sunLight.castShadow = true;
   sunLight.shadow.mapSize.set(2048, 2048);
-  sunLight.shadow.camera.left = -12;
-  sunLight.shadow.camera.right = 12;
-  sunLight.shadow.camera.top = 12;
-  sunLight.shadow.camera.bottom = -12;
+  sunLight.shadow.camera.left = -SHADOW_HALF_EXTENT;
+  sunLight.shadow.camera.right = SHADOW_HALF_EXTENT;
+  sunLight.shadow.camera.top = SHADOW_HALF_EXTENT;
+  sunLight.shadow.camera.bottom = -SHADOW_HALF_EXTENT;
   scene.add(sunLight);
 
   return { renderer, scene, camera, sunLight };

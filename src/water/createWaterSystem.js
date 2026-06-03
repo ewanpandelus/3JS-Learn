@@ -1,6 +1,16 @@
 import * as THREE from 'three';
 
-const WATER_SCALE = 9;
+import {
+  WATER_SURFACE_DEPTH,
+  WATER_SURFACE_MARGIN_SCALE,
+  WATER_SURFACE_WIDTH
+} from '../config/worldExtents.js';
+
+/** Reference terrain extent used when deriving default water surface size. */
+export const WATER_REFERENCE_TERRAIN_EXTENT = WATER_SURFACE_WIDTH / WATER_SURFACE_MARGIN_SCALE;
+export const WATER_SURFACE_SCALE = WATER_SURFACE_MARGIN_SCALE;
+export const DEFAULT_WATER_SURFACE_WIDTH = WATER_SURFACE_WIDTH;
+export const DEFAULT_WATER_SURFACE_DEPTH = WATER_SURFACE_DEPTH;
 const REFLECTION_BIAS = new THREE.Matrix4().set(
   0.5, 0.0, 0.0, 0.5,
   0.0, 0.5, 0.0, 0.5,
@@ -11,6 +21,19 @@ const REFLECTION_MIN_SIZE = 2;
 const OPEN_WATER_DEPTH_SAMPLE = 0.999;
 const REFLECTION_CLIP_OFFSET = 0.001;
 const REFRACTION_CLIP_OFFSET = 0.001;
+/** Suppresses false shallow depth from depth-buffer silhouette noise (world units). */
+const SHORELINE_DEPTH_EPSILON = 0.003;
+/** Minimum shoreline fade band when fade-end slider is very tight (world units). */
+const SHORELINE_MIN_FADE_WIDTH = 0.06;
+/** Scales derivative-based widening of the shoreline fade. */
+const SHORELINE_FWIDTH_SCALE = 1.25;
+const DEPTH_SAMPLE_OFFSETS = [
+  [0, 0],
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1]
+];
 
 /**
  * Built-in defaults for water tuning (used when localStorage has no saved snapshot).
@@ -35,7 +58,7 @@ export const DEFAULT_WATER_SETTINGS = {
 
 /**
  * Builds a water plane with an offscreen terrain reflection pass.
- * Inputs: `renderer`, `scene`, `camera`, terrain `width`/`depth`, initial `seaLevel`, optional `waterSettings` partial overrides.
+ * Inputs: `renderer`, `scene`, `camera`, water surface `width`/`depth`, initial `seaLevel`, optional `waterSettings` partial overrides.
  * Outputs: object with `water`, `render`, `resize`, `updateSeaLevel`, `getSettings`, and `updateSettings`.
  * Internal: renders reflection/refraction textures with clip planes, then projects those textures in the water shader.
  */
@@ -56,6 +79,9 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
   });
   reflectionTarget.texture.colorSpace = THREE.SRGBColorSpace;
   refractionTarget.texture.colorSpace = THREE.SRGBColorSpace;
+  configureWaterRenderTargetTexture(reflectionTarget.texture);
+  configureWaterRenderTargetTexture(refractionTarget.texture);
+  const depthTexelSize = new THREE.Vector2(1 / reflectionSize.x, 1 / reflectionSize.y);
   const reflectionCamera = camera.clone();
   reflectionCamera.matrixAutoUpdate = true;
   const reflectionMatrix = new THREE.Matrix4();
@@ -67,7 +93,7 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
   const reflectionClipPlane = new THREE.Plane();
   const refractionClipPlane = new THREE.Plane();
 
-  const waterGeometry = new THREE.PlaneGeometry(width * WATER_SCALE, depth * WATER_SCALE, 1, 1);
+  const waterGeometry = new THREE.PlaneGeometry(width, depth, 1, 1);
   waterGeometry.rotateX(-Math.PI / 2);
   const waterMaterial = new THREE.ShaderMaterial({
     transparent: true,
@@ -79,6 +105,7 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
       uRefractionMap: { value: refractionTarget.texture },
       uRefractionMatrix: { value: refractionMatrix },
       uDepthMap: { value: refractionDepthTexture },
+      uDepthTexelSize: { value: depthTexelSize },
       uCameraNear: { value: camera.near },
       uCameraFar: { value: camera.far },
       uCameraInverseProjectionMatrix: { value: new THREE.Matrix4() },
@@ -121,6 +148,7 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
       uniform sampler2D uReflectionMap;
       uniform sampler2D uRefractionMap;
       uniform sampler2D uDepthMap;
+      uniform vec2 uDepthTexelSize;
       uniform float uCameraNear;
       uniform float uCameraFar;
       uniform mat4 uCameraInverseProjectionMatrix;
@@ -145,8 +173,7 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
       varying vec4 vReflectionCoord;
       varying vec4 vRefractionCoord;
 
-      float getWaterColumnDepth(const in vec2 depthUv) {
-        float packedDepth = texture2D(uDepthMap, depthUv).r;
+      float columnDepthFromPacked(const in vec2 depthUv, const in float packedDepth) {
         if (packedDepth >= ${OPEN_WATER_DEPTH_SAMPLE.toFixed(3)}) {
           return uShallowDepthFadeEnd + 1.0;
         }
@@ -159,14 +186,44 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
         return uSeaLevel - worldPos.y;
       }
 
+      float sampleWaterColumnDepth(const in vec2 depthUv) {
+        float shallowestColumn = columnDepthFromPacked(
+          depthUv,
+          texture2D(uDepthMap, depthUv).r
+        );
+        ${DEPTH_SAMPLE_OFFSETS.slice(1).map(
+          ([offsetX, offsetY]) => {
+            const offsetGlsl = `vec2(${offsetX.toFixed(1)}, ${offsetY.toFixed(1)})`;
+            return `{
+          vec2 tapUv = depthUv + uDepthTexelSize * ${offsetGlsl};
+          float tapColumn = columnDepthFromPacked(tapUv, texture2D(uDepthMap, tapUv).r);
+          shallowestColumn = min(shallowestColumn, tapColumn);
+        }`;
+          }
+        ).join('\n        ')}
+        return shallowestColumn;
+      }
+
       void main() {
         vec2 depthUv = (vClipSpace.xy / vClipSpace.w) * 0.5 + 0.5;
-        depthUv = clamp(depthUv, 0.001, 0.999);
+        depthUv = clamp(depthUv, uDepthTexelSize * 2.0, 1.0 - uDepthTexelSize * 2.0);
 
-        float waterColumnDepth = getWaterColumnDepth(depthUv);
-        float shoreFade = smoothstep(uShallowDepthFadeStart, uShallowDepthFadeEnd, waterColumnDepth);
-        float opticalDepth = 1.0 - exp(-max(waterColumnDepth, 0.0) * uDepthMultiplier);
-        float depthAlpha = (1.0 - exp(-max(waterColumnDepth, 0.0) * uAlphaMultiplier)) * shoreFade;
+        float waterColumnDepth = max(
+          sampleWaterColumnDepth(depthUv) - ${SHORELINE_DEPTH_EPSILON.toFixed(3)},
+          0.0
+        );
+        float shoreBand = max(
+          uShallowDepthFadeEnd - uShallowDepthFadeStart,
+          ${SHORELINE_MIN_FADE_WIDTH.toFixed(2)}
+        );
+        float shoreAA = fwidth(waterColumnDepth) * ${SHORELINE_FWIDTH_SCALE.toFixed(1)};
+        float shoreFade = smoothstep(
+          uShallowDepthFadeStart - shoreAA,
+          uShallowDepthFadeStart + shoreBand + shoreAA,
+          waterColumnDepth
+        );
+        float opticalDepth = 1.0 - exp(-waterColumnDepth * uDepthMultiplier);
+        float depthAlpha = (1.0 - exp(-waterColumnDepth * uAlphaMultiplier)) * shoreFade;
 
         vec3 waterColour = mix(uWaterColourShallow, uWaterColourDeep, opticalDepth);
 
@@ -246,6 +303,7 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
     const nextHeight = Math.max(REFLECTION_MIN_SIZE, Math.floor(heightPx * pixelRatio));
     reflectionTarget.setSize(nextWidth, nextHeight);
     refractionTarget.setSize(nextWidth, nextHeight);
+    waterMaterial.uniforms.uDepthTexelSize.value.set(1 / nextWidth, 1 / nextHeight);
   }
 
   /**
@@ -425,6 +483,20 @@ export function createWaterSystem({ renderer, scene, camera, width, depth, seaLe
     getSettings,
     updateSettings
   };
+}
+
+/**
+ * Configures offscreen water textures for stable edge sampling.
+ * Inputs: `texture` as `THREE.Texture` attached to a water render target.
+ * Outputs: mutates wrap/filter/mipmap settings on the texture.
+ * Internal: clamps colour UVs at edges and disables mipmaps to avoid streaks (not used on depth).
+ */
+function configureWaterRenderTargetTexture(texture) {
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
 }
 
 /**
