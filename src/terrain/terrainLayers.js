@@ -7,6 +7,12 @@ export const DEFAULT_BASE_LAYER = {
   persistence: 0.5
 };
 
+/** Coastline and island-wide shape tuning (not mountain stack layers). */
+export const DEFAULT_ISLAND_SETTINGS = {
+  edgeNoiseAmplitude: 0.08,
+  edgeNoiseFrequency: 0.42
+};
+
 const LAYER_SEED_STRIDE = 7919;
 const LAYER_OFFSET_STRIDE_X = 17.3;
 const LAYER_OFFSET_STRIDE_Z = -11.7;
@@ -41,6 +47,7 @@ export function createDefaultTerrainLayer(index = 0, overrides = {}) {
 export function normalizeTerrainSettings(settings = {}) {
   const normalized = { ...settings };
   normalized.baseLayer = { ...DEFAULT_BASE_LAYER, ...(normalized.baseLayer ?? {}) };
+  normalized.island = { ...DEFAULT_ISLAND_SETTINGS, ...(normalized.island ?? {}) };
 
   const legacyNoise =
     typeof settings.amplitude === 'number' ||

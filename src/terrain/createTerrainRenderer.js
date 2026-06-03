@@ -4,6 +4,7 @@ import { TERRAIN_DEPTH, TERRAIN_SEGMENTS, TERRAIN_WIDTH } from '../config/worldE
 import {
   createDefaultTerrainLayer,
   DEFAULT_BASE_LAYER,
+  DEFAULT_ISLAND_SETTINGS,
   normalizeTerrainSettings
 } from './terrainLayers.js';
 /** Normalized radius of full-strength dry land before the shore rise band. */
@@ -20,6 +21,14 @@ const ISLAND_LAND_BASE_HEIGHT = 0.42;
 const ISLAND_SHELF_SUBMERGE_DEPTH = 0.55;
 /** Lowest hills on dry land as a fraction of amplitude (avoids flat zero-clamped valleys). */
 const ISLAND_NOISE_HEIGHT_FLOOR = 0.22;
+/** Seed offset for dedicated coastline edge noise. */
+const EDGE_NOISE_SEED_OFFSET = 4242;
+/** fBm octave count for coastline edge noise. */
+const EDGE_NOISE_OCTAVES = 3;
+/** fBm lacunarity for coastline edge noise. */
+const EDGE_NOISE_LACUNARITY = 2;
+/** fBm persistence for coastline edge noise. */
+const EDGE_NOISE_PERSISTENCE = 0.5;
 const TERRAIN_SEA_LEVEL = -0.18;
 const TERRAIN_PERSISTENCE = 0.5;
 const TERRAIN_SEED = 1337;
@@ -33,6 +42,7 @@ const DEFAULT_TERRAIN_SETTINGS = {
   seaLevel: TERRAIN_SEA_LEVEL,
   seed: TERRAIN_SEED,
   baseLayer: { ...DEFAULT_BASE_LAYER },
+  island: { ...DEFAULT_ISLAND_SETTINGS },
   layers: [createDefaultTerrainLayer(0)],
   colorLow: '#304a33',
   colorHigh: '#b6c391'
@@ -144,6 +154,41 @@ function islandLandMask(x, z, halfWidth, halfDepth) {
 }
 
 /**
+ * Mask peaking along the island shore band where edge noise should apply.
+ * Inputs: `x` and `z` vertex coordinates, `halfWidth` and `halfDepth` mesh half-extents.
+ * Outputs: multiplier in [0, 1] (0 in core and open water, peak mid-coast).
+ * Internal: sine bell across radial span from core radius to water envelope end.
+ */
+function coastalEdgeMask(x, z, halfWidth, halfDepth) {
+  const radialDistance = Math.hypot(x / halfWidth, z / halfDepth);
+  if (radialDistance <= ISLAND_CORE_RADIUS || radialDistance >= ISLAND_WATER_ENVELOPE_END) {
+    return 0;
+  }
+  const shoreSpan = ISLAND_WATER_ENVELOPE_END - ISLAND_CORE_RADIUS;
+  const shoreT = (radialDistance - ISLAND_CORE_RADIUS) / shoreSpan;
+  return Math.sin(Math.PI * shoreT);
+}
+
+/**
+ * Vertical coastline wobble from bipolar fBm noise.
+ * Inputs: `noise2D` simplex function, `x` and `z` coordinates, and `island` edge noise settings.
+ * Outputs: signed height offset scaled by `edgeNoiseAmplitude`.
+ * Internal: uses fixed fBm octaves; frequency comes from island settings.
+ */
+function sampleCoastalEdgeNoise(noise2D, x, z, island) {
+  if (island.edgeNoiseAmplitude <= 0) {
+    return 0;
+  }
+  const noise = sampleTerrainHeight(noise2D, x, z, {
+    frequency: island.edgeNoiseFrequency,
+    octaves: EDGE_NOISE_OCTAVES,
+    lacunarity: EDGE_NOISE_LACUNARITY,
+    persistence: EDGE_NOISE_PERSISTENCE
+  });
+  return noise * island.edgeNoiseAmplitude;
+}
+
+/**
  * Rebuilds vertex heights for simple layered-noise terrain.
  * Inputs: `geometry`, `settings`, and mutable `scratch` object for cached arrays/range.
  * Outputs: updates vertex y positions and normalized height attribute; recomputes normals.
@@ -152,6 +197,7 @@ function islandLandMask(x, z, halfWidth, halfDepth) {
 function rebuildTerrainHeights(geometry, settings, scratch) {
   const seededRandom = createSeededRandom(settings.seed);
   const baseNoise2D = createNoise2D(seededRandom);
+  const edgeNoise2D = createNoise2D(createSeededRandom(settings.seed + EDGE_NOISE_SEED_OFFSET));
   scratch.layerNoise2D = settings.layers.map((layer) =>
     createNoise2D(createSeededRandom(settings.seed + layer.seedOffset))
   );
@@ -184,6 +230,9 @@ function rebuildTerrainHeights(geometry, settings, scratch) {
       );
       y += landMask * mountainHeight * landMask;
     }
+
+    const edgeMask = coastalEdgeMask(x, z, halfWidth, halfDepth);
+    y += edgeMask * sampleCoastalEdgeNoise(edgeNoise2D, x, z, settings.island);
 
     y -= envelope * ISLAND_SHELF_SUBMERGE_DEPTH;
     scratch.heights[i] = y;
@@ -319,6 +368,7 @@ export function createTerrainRenderer(overrides = {}) {
     const geometryDirty =
       settings.seed !== previousSettings.seed ||
       JSON.stringify(settings.baseLayer) !== JSON.stringify(previousSettings.baseLayer) ||
+      JSON.stringify(settings.island) !== JSON.stringify(previousSettings.island) ||
       JSON.stringify(settings.layers) !== JSON.stringify(previousSettings.layers);
 
     const colorDirty =

@@ -1,4 +1,8 @@
-import { createDefaultTerrainLayer, DEFAULT_BASE_LAYER } from '../terrain/terrainLayers.js';
+import {
+  createDefaultTerrainLayer,
+  DEFAULT_BASE_LAYER,
+  DEFAULT_ISLAND_SETTINGS
+} from '../terrain/terrainLayers.js';
 import { applyPanelChrome, buildControl, ensurePanelStyles } from './panelTheme.js';
 
 const TAB_IDS = ['island', 'layers', 'paint', 'water'];
@@ -25,6 +29,7 @@ export function createSceneEditorPanel({
     ? terrainSettings.layers.map((layer, index) => ({ ...createDefaultTerrainLayer(index), ...layer }))
     : [];
   let baseLayer = { ...DEFAULT_BASE_LAYER, ...terrainSettings.baseLayer };
+  let island = { ...DEFAULT_ISLAND_SETTINGS, ...terrainSettings.island };
   let colorLow = terrainSettings.colorLow;
   let colorHigh = terrainSettings.colorHigh;
   let water = { ...waterSettings };
@@ -84,18 +89,33 @@ export function createSceneEditorPanel({
   }
 
   /**
+   * Builds a unique input name for one mountain layer field.
+   * Inputs: `index` layer index, `field` property key string.
+   * Outputs: namespaced name string (e.g. `layer-1-octaves`).
+   * Internal: avoids duplicate `name` attributes across accordion sections.
+   */
+  function layerInputName(index, field) {
+    return `layer-${index}-${field}`;
+  }
+
+  /**
    * Reads one layer panel's inputs into a layer settings object.
-   * Inputs: `layerPanel` element with `data-layer-panel`.
-   * Outputs: layer settings object or `null` when panel is invalid.
-   * Internal: queries named inputs inside the layer panel subtree.
+   * Inputs: `layerPanel` element with `data-layer-panel` and `data-layer-index`.
+   * Outputs: partial layer settings from visible sliders only, or `null` when invalid.
+   * Internal: does not read persistence (no UI); caller merges with previous layer state.
    */
   function readLayerFromPanel(layerPanel) {
     if (!(layerPanel instanceof HTMLElement)) {
       return null;
     }
 
-    const readNumber = (name) => {
-      const input = layerPanel.querySelector(`input[name="${name}"]`);
+    const index = Number(layerPanel.getAttribute('data-layer-index'));
+    if (!Number.isInteger(index)) {
+      return null;
+    }
+
+    const readNumber = (field) => {
+      const input = layerPanel.querySelector(`input[name="${layerInputName(index, field)}"]`);
       return input instanceof HTMLInputElement ? Number.parseFloat(input.value) : 0;
     };
 
@@ -104,7 +124,6 @@ export function createSceneEditorPanel({
       frequency: readNumber('frequency'),
       octaves: Math.round(readNumber('octaves')),
       lacunarity: readNumber('lacunarity'),
-      persistence: readNumber('persistence'),
       enabled: true
     };
   }
@@ -120,10 +139,17 @@ export function createSceneEditorPanel({
     layers = layerPanels.map((layerPanel, index) => {
       const parsed = readLayerFromPanel(layerPanel);
       const previous = layers[index] ?? createDefaultTerrainLayer(index);
+      if (!parsed) {
+        return { ...createDefaultTerrainLayer(index), ...previous };
+      }
       return {
         ...createDefaultTerrainLayer(index),
         ...previous,
-        ...parsed
+        amplitude: parsed.amplitude,
+        frequency: parsed.frequency,
+        octaves: parsed.octaves,
+        lacunarity: parsed.lacunarity,
+        enabled: parsed.enabled
       };
     });
   }
@@ -147,10 +173,10 @@ export function createSceneEditorPanel({
           <button type="button" class="editor-btn editor-btn--danger" data-remove-layer="${index}">Remove</button>
         </summary>
         <div class="editor-layer__body">
-          ${buildControl('Amplitude', 'amplitude', 'range', { min: 0, max: 3, step: 0.01, value: layer.amplitude })}
-          ${buildControl('Frequency', 'frequency', 'range', { min: 0.1, max: 3, step: 0.01, value: layer.frequency })}
-          ${buildControl('Octaves', 'octaves', 'range', { min: 1, max: 8, step: 1, value: layer.octaves })}
-          ${buildControl('Lacunarity', 'lacunarity', 'range', { min: 1.2, max: 3.2, step: 0.01, value: layer.lacunarity })}
+          ${buildControl('Amplitude', layerInputName(index, 'amplitude'), 'range', { min: 0, max: 3, step: 0.01, value: layer.amplitude })}
+          ${buildControl('Frequency', layerInputName(index, 'frequency'), 'range', { min: 0.1, max: 3, step: 0.01, value: layer.frequency })}
+          ${buildControl('Octaves', layerInputName(index, 'octaves'), 'range', { min: 1, max: 8, step: 1, value: layer.octaves })}
+          ${buildControl('Lacunarity', layerInputName(index, 'lacunarity'), 'range', { min: 1.2, max: 3.2, step: 0.01, value: layer.lacunarity })}
         </div>
       </details>
     `;
@@ -170,10 +196,14 @@ export function createSceneEditorPanel({
 
     if (activeTab === 'island') {
       body.innerHTML = `
-        <p class="editor-panel__hint" style="margin:0 0 12px;">Landmass shape — not stacked mountain noise.</p>
-        <section data-base-panel>
+        <p class="editor-panel__hint" style="margin:0 0 12px;">Landmass shape and noisy coastline height.</p>
+        <section data-island-panel>
+          <p class="editor-section-title">Plateau surface</p>
           ${buildControl('Surface amplitude', 'baseAmplitude', 'range', { min: 0, max: 0.8, step: 0.01, value: baseLayer.amplitude })}
           ${buildControl('Surface frequency', 'baseFrequency', 'range', { min: 0.05, max: 1.5, step: 0.01, value: baseLayer.frequency })}
+          <p class="editor-section-title" style="margin-top:14px;">Coast edge</p>
+          ${buildControl('Edge noise height', 'edgeNoiseAmplitude', 'range', { min: 0, max: 0.35, step: 0.01, value: island.edgeNoiseAmplitude })}
+          ${buildControl('Edge noise scale', 'edgeNoiseFrequency', 'range', { min: 0.1, max: 2, step: 0.01, value: island.edgeNoiseFrequency })}
         </section>
       `;
       return;
@@ -262,8 +292,8 @@ export function createSceneEditorPanel({
     if (!summary) {
       return;
     }
-    const amplitude = layerPanel.querySelector('input[name="amplitude"]');
-    const frequency = layerPanel.querySelector('input[name="frequency"]');
+    const amplitude = layerPanel.querySelector(`input[name="${layerInputName(index, 'amplitude')}"]`);
+    const frequency = layerPanel.querySelector(`input[name="${layerInputName(index, 'frequency')}"]`);
     if (!(amplitude instanceof HTMLInputElement) || !(frequency instanceof HTMLInputElement)) {
       return;
     }
@@ -285,9 +315,9 @@ export function createSceneEditorPanel({
       return;
     }
 
-    const valueBubble = panel.querySelector(`[data-value="${target.name}"]`);
-    const nextValue =
-      target.name === 'octaves' ? Number.parseInt(target.value, 10) : Number.parseFloat(target.value);
+    const valueBubble = target.closest('.editor-control')?.querySelector(`[data-value="${target.name}"]`);
+    const isOctaves = target.name.endsWith('-octaves') || target.name === 'octaves';
+    const nextValue = isOctaves ? Number.parseInt(target.value, 10) : Number.parseFloat(target.value);
     if (valueBubble) {
       valueBubble.textContent = String(nextValue);
     }
@@ -297,15 +327,24 @@ export function createSceneEditorPanel({
       updateLayerSummary(layerPanel);
     }
 
-    const inBasePanel = target.closest('[data-base-panel]');
-    if (inBasePanel) {
+    const inIslandPanel = target.closest('[data-island-panel]');
+    if (inIslandPanel) {
       if (target.name === 'baseAmplitude') {
         baseLayer.amplitude = nextValue;
       }
       if (target.name === 'baseFrequency') {
         baseLayer.frequency = nextValue;
       }
-      Object.assign(pendingTerrainPatch, { baseLayer: { ...baseLayer } });
+      if (target.name === 'edgeNoiseAmplitude') {
+        island.edgeNoiseAmplitude = nextValue;
+      }
+      if (target.name === 'edgeNoiseFrequency') {
+        island.edgeNoiseFrequency = nextValue;
+      }
+      Object.assign(pendingTerrainPatch, {
+        baseLayer: { ...baseLayer },
+        island: { ...island }
+      });
     } else if (layerPanel) {
       syncLayersFromDom();
       Object.assign(pendingTerrainPatch, { layers: layers.map((layer) => ({ ...layer })) });
@@ -402,6 +441,9 @@ export function createSceneEditorPanel({
     if (nextSettings?.baseLayer) {
       baseLayer = { ...baseLayer, ...nextSettings.baseLayer };
     }
+    if (nextSettings?.island) {
+      island = { ...island, ...nextSettings.island };
+    }
     if (Array.isArray(nextSettings?.layers)) {
       layers = nextSettings.layers.map((layer, index) => ({
         ...createDefaultTerrainLayer(index),
@@ -418,7 +460,7 @@ export function createSceneEditorPanel({
     renderActiveTab();
 
     for (const [key, value] of Object.entries(nextSettings ?? {})) {
-      if (key === 'baseLayer' || key === 'layers') {
+      if (key === 'baseLayer' || key === 'island' || key === 'layers') {
         continue;
       }
       const input = panel.querySelector(`input[name="${key}"]`);
